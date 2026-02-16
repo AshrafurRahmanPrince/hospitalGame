@@ -164,6 +164,57 @@ void spawnZombie()
 	zombiesSpawned++;
 }
 
+// Reset the entire game state (used for restart and starting a new game)
+void resetGame()
+{
+    playerX = 200;
+    playerY = 200;
+    playerHP = 100;
+    score = 0;
+    ammo = maxAmmo;
+    gameOver = false;
+
+    currentScreen = SCREEN_GAME;
+    isRunning = false;
+    shootPulseTimer = 0;
+    currentSoundRadius = 0;
+    charFrame = 0;
+    charFrameCounter = 0;
+
+    // reset zombies
+    zombiesSpawned = 0;
+    for (int i = 0; i < ZOMBIE_COUNT; i++)
+    {
+        zombieAlive[i] = false;
+        zombieHP[i] = 20;
+        zombieX[i] = 0;
+        zombieY[i] = 0;
+        zombieSize[i] = 30;
+        zombieSpeed[i] = (i < 3) ? 1 : 2;
+        zState[i] = Z_WANDER;
+        wanderTimer[i] = 0;
+        hearTimer[i] = 0;
+        hearX[i] = 0;
+        hearY[i] = 0;
+    }
+
+    // reset bullets
+    for (int i = 0; i < MAX_BULLETS; i++)
+    {
+        bulletActive[i] = false;
+        bulletX[i] = 0;
+        bulletY[i] = 0;
+        bulletDX[i] = 0.0;
+        bulletDY[i] = 0.0;
+    }
+
+    // spawn initial zombie
+    spawnZombie();
+
+    mciSendString("stop ggsong", NULL, 0, NULL);
+    mciSendString("play bgsong repeat", NULL, 0, NULL);
+}
+
 // =====================================================
 // DRAW
 // =====================================================
@@ -380,8 +431,8 @@ void iMouse(int button, int state, int mx, int my)
 	{
 		if (isInside(mx, my, btnPlay))
 		{
-			currentScreen = SCREEN_GAME;
-			gameOver = false;
+			// start a fresh game when Play is clicked
+			resetGame();
 		}
 		else if (isInside(mx, my, btnSettings))
 		{
@@ -506,8 +557,15 @@ void updateZombieAI()
 // =====================================================
 void fixedUpdate()
 {
-	if (currentScreen != SCREEN_GAME) return;
-	if (gameOver) return;
+    if (currentScreen != SCREEN_GAME) return;
+
+    // If game over, still poll for restart key so keyboard can restart the game
+    if (gameOver)
+    {
+        if (isKeyPressed('r') || isKeyPressed('R'))
+            resetGame();
+        return;
+    }
 
 	// ----- STRICT CONTROLS -----
 	bool shiftHeld = (GetKeyState(VK_LSHIFT) & 0x8000) || (GetKeyState(VK_RSHIFT) & 0x8000);
@@ -684,27 +742,8 @@ void iKeyboard(unsigned char key)
 	{
 		if (gameOver)
 		{
-			playerX = 200;
-			playerY = 200;
-			playerHP = 100;
-			score = 0;
-			ammo = maxAmmo;
-			gameOver = false;
-
-			zombiesSpawned = 0;
-			for (int i = 0; i < ZOMBIE_COUNT; i++)
-			{
-				zombieAlive[i] = false;
-				zombieHP[i] = 20;
-			}
-
-			for (int i = 0; i < MAX_BULLETS; i++)
-				bulletActive[i] = false;
-
-			spawnZombie();
-
-			mciSendString("stop ggsong", NULL, 0, NULL);
-			mciSendString("play bgsong repeat", NULL, 0, NULL);
+			// use centralized reset
+			resetGame();
 		}
 	}
 }
