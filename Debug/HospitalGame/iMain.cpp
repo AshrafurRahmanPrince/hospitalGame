@@ -266,7 +266,7 @@ void drawMenu()
 	drawButton(btnCredits);
 	drawButton(btnQuit);
 
-	iText(170, 30, "Mouse: Aim | WASD: Move | Shift+WASD: Run | Click: Shoot");
+	iText(145, 30, "Mouse: Aim | WASD: Move | Shift+WASD: Run | Click: Shoot");
 }
 
 void drawSettings()
@@ -796,4 +796,5 @@ int main()
 	iStart();
 	return 0;
 }
+
 
