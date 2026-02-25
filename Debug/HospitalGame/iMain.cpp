@@ -558,7 +558,24 @@ void updateZombieAI()
 // UPDATE
 // =====================================================
 void fixedUpdate()
-{
+{	
+	if (currentScreen != SCREEN_GAME)
+	{
+    // allow returning from Settings/Credits by polling key (some environments
+    // may not deliver iKeyboard events reliably). This makes 'B' work
+    // even when not in the game loop.
+    if (currentScreen == SCREEN_SETTINGS || currentScreen == SCREEN_CREDITS)
+    {
+        if (isKeyPressed('b') || isKeyPressed('B'))
+        {
+            currentScreen = SCREEN_MENU;
+            return;
+        }
+    }
+
+    return;
+	}
+	
     if (currentScreen != SCREEN_GAME) return;
 
     // If game over, still poll for restart key so keyboard can restart the game
@@ -739,7 +756,13 @@ void fixedUpdate()
 // KEYBOARD (RESTART)
 // =====================================================
 void iKeyboard(unsigned char key)
-{
+{	
+	// Allow returning from Settings screen by pressing B
+	if ((key == 'b' || key == 'B') && currentScreen == SCREEN_SETTINGS)
+	{
+    	currentScreen = SCREEN_MENU;
+    	return;
+	}
 	if (key == 'r' || key == 'R')
 	{
 		if (gameOver)
@@ -796,5 +819,6 @@ int main()
 	iStart();
 	return 0;
 }
+
 
 
