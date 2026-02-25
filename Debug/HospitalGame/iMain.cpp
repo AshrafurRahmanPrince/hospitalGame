@@ -444,7 +444,9 @@ void iMouse(int button, int state, int mx, int my)
 		}
 		else if (isInside(mx, my, btnQuit))
 		{
-			gameOver = true;
+			mciSendString("stop bgsong", NULL, 0, NULL);
+			mciSendString("stop ggsong", NULL, 0, NULL);
+			exit(0);
 		}
 		return;
 	}
@@ -794,3 +796,4 @@ int main()
 	iStart();
 	return 0;
 }
+
