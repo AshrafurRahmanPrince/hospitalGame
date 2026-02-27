@@ -1,4 +1,4 @@
-﻿#include "iGraphics.h"
+#include "iGraphics.h"
 
 #include <windows.h>   // SHIFT detection
 #include <mmsystem.h>  // mciSendString
@@ -326,8 +326,14 @@ void iDraw()
 		charFrame = 0;
 	}
 
-	// player sprite (draw ONCE)
-	iShowImage(playerX, playerY, playerSize, playerSize, charImg[charFrame]);
+	// player sprite (draw ONCE) - rotated to face mouse cursor
+	double viewAngleDegrees = viewAngle * (180.0 / 3.14159265359) - 90.0;
+	glPushMatrix();
+	glTranslatef(playerX + playerSize / 2.0f, playerY + playerSize / 2.0f, 0);
+	glRotatef(viewAngleDegrees, 0, 0, 1);
+	glTranslatef(-(playerSize / 2.0f), -(playerSize / 2.0f), 0);
+	iShowImage(0, 0, playerSize, playerSize, charImg[charFrame]);
+	glPopMatrix();
 
 	// ===== flashlight rays =====
 	int frontOffset = 15;
@@ -558,25 +564,23 @@ void updateZombieAI()
 // UPDATE
 // =====================================================
 void fixedUpdate()
-{	
-	if (currentScreen != SCREEN_GAME)
-	{
-    // allow returning from Settings/Credits by polling key (some environments
-    // may not deliver iKeyboard events reliably). This makes 'B' work
-    // even when not in the game loop.
-    if (currentScreen == SCREEN_SETTINGS || currentScreen == SCREEN_CREDITS)
+{
+    if (currentScreen != SCREEN_GAME)
     {
-        if (isKeyPressed('b') || isKeyPressed('B'))
+        // allow returning from Settings/Credits by polling key (some environments
+        // may not deliver iKeyboard events reliably). This makes 'B' work
+        // even when not in the game loop.
+        if (currentScreen == SCREEN_SETTINGS || currentScreen == SCREEN_CREDITS)
         {
-            currentScreen = SCREEN_MENU;
-            return;
+            if (isKeyPressed('b') || isKeyPressed('B'))
+            {
+                currentScreen = SCREEN_MENU;
+                return;
+            }
         }
-    }
 
-    return;
-	}
-	
-    if (currentScreen != SCREEN_GAME) return;
+        return;
+    }
 
     // If game over, still poll for restart key so keyboard can restart the game
     if (gameOver)
@@ -756,13 +760,14 @@ void fixedUpdate()
 // KEYBOARD (RESTART)
 // =====================================================
 void iKeyboard(unsigned char key)
-{	
-	// Allow returning from Settings screen by pressing B
-	if ((key == 'b' || key == 'B') && currentScreen == SCREEN_SETTINGS)
-	{
-    	currentScreen = SCREEN_MENU;
-    	return;
-	}
+{
+    // Allow returning from Settings screen by pressing B
+    if ((key == 'b' || key == 'B') && currentScreen == SCREEN_SETTINGS)
+    {
+        currentScreen = SCREEN_MENU;
+        return;
+    }
+
 	if (key == 'r' || key == 'R')
 	{
 		if (gameOver)
@@ -819,6 +824,3 @@ int main()
 	iStart();
 	return 0;
 }
-
-
-
