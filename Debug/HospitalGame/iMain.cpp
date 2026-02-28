@@ -15,8 +15,15 @@ const int WIN_H = 400;
 // ================= IMAGES =================
 int backgroundImage;
 int backgroundImage2;
+int backgroundImage3;
 int charImg[6];
 int zombieImg[7];
+// exit door
+int exitDoorImg;
+int exitDoorX = 0;
+int exitDoorY = 0;
+int exitDoorW = 0;
+int exitDoorH = 0;
 
 // ================= MOUSE / VISION =================
 int mouseX = 0, mouseY = 0;
@@ -67,6 +74,9 @@ double hearX[ZOMBIE_COUNT];      // investigation target x
 double hearY[ZOMBIE_COUNT];      // investigation target y
 int hearTimer[ZOMBIE_COUNT];     // how long to keep investigating
 
+// facing angle for each zombie (radians)
+double zombieAngle[ZOMBIE_COUNT];
+
 
 // ================= SOUND SYSTEM =================
 int walkRadius = 50;     // small
@@ -90,20 +100,34 @@ bool bulletActive[MAX_BULLETS];
 double bulletDX[MAX_BULLETS];
 double bulletDY[MAX_BULLETS];
 
-int bulletSpeed = 10;
+int bulletSpeed = 30;
 
 // ================= AMMO / SCORE =================
 int ammo = 10;
 int maxAmmo = 10;
 int score = 0;
 
-// per-zombie facing angle (radians)
-double zombieAngle[ZOMBIE_COUNT];
-
 
 // ================= SCREEN / MENU =================
-enum Screen { SCREEN_MENU, SCREEN_GAME, SCREEN_SETTINGS, SCREEN_CREDITS };
+enum Screen { SCREEN_MENU, SCREEN_GAME, SCREEN_SETTINGS, SCREEN_CREDITS, SCREEN_WIN };
 Screen currentScreen = SCREEN_MENU;
+// win screen will be shown after final level
+enum { FINAL_LEVEL = 2 };
+
+
+// ================= GAME FLOW STATE =================
+enum GameState { STATE_PLAYING, STATE_LEVEL_CLEAR, STATE_TRANSITION };
+GameState gameState = STATE_PLAYING;
+
+int transitionTimer = 0;
+int fadeAlpha = 0;
+
+
+// ================= LEVEL SYSTEM =================
+int currentLevel = 1;
+int zombiesKilled = 0;
+int levelTarget = 10;   // how many kills needed to clear level 1
+
 
 // Simple button struct
 struct Button {
@@ -119,6 +143,63 @@ Button btnQuit = { 220, 90, 160, 40, "QUIT" };
 bool isInside(int mx, int my, Button b)
 {
 	return (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h);
+}
+
+void drawWin()
+{
+    iSetColor(0, 0, 0);
+    iFilledRectangle(0, 0, WIN_W, WIN_H);
+
+    iSetColor(255, 255, 255);
+    iText(240, 230, "YOU WIN", GLUT_BITMAP_TIMES_ROMAN_24);
+    iText(170, 190, "Congratulations! You escaped the hospital.", GLUT_BITMAP_HELVETICA_18);
+    iText(200, 120, "Press R to play again", GLUT_BITMAP_HELVETICA_18);
+    iText(180, 90, "Press M to return to Main Menu", GLUT_BITMAP_HELVETICA_18);
+}
+
+// Place exit door at a random position depending on level
+void placeExitDoorForLevel(int level)
+{
+    // make door size constant
+    exitDoorW = 60;
+    exitDoorH = 80;
+
+    // place door almost anywhere but keep a margin from edges
+    int margin = 20;
+    int minX = margin;
+    int maxX = WIN_W - margin - exitDoorW;
+    int minY = margin;
+    int maxY = WIN_H - margin - exitDoorH;
+
+    if (maxX < minX) maxX = minX;
+    if (maxY < minY) maxY = minY;
+
+    // try to pick a position far from player's current position to increase variety
+    int attempts = 0;
+    const int MAX_ATTEMPTS = 20;
+    const int MIN_DIST = 180; // pixels
+    int px = playerX + playerSize / 2;
+    int py = playerY + playerSize / 2;
+
+    while (attempts < MAX_ATTEMPTS)
+    {
+        int nx = minX + (maxX > minX ? rand() % (maxX - minX + 1) : 0);
+        int ny = minY + (maxY > minY ? rand() % (maxY - minY + 1) : 0);
+
+        int dx = nx + exitDoorW/2 - px;
+        int dy = ny + exitDoorH/2 - py;
+        if (dx*dx + dy*dy >= MIN_DIST * MIN_DIST)
+        {
+            exitDoorX = nx;
+            exitDoorY = ny;
+            return;
+        }
+        attempts++;
+    }
+
+    // fallback: pick any valid position
+    exitDoorX = minX + (maxX > minX ? rand() % (maxX - minX + 1) : 0);
+    exitDoorY = minY + (maxY > minY ? rand() % (maxY - minY + 1) : 0);
 }
 
 void drawButton(Button b)
@@ -141,8 +222,12 @@ void drawButton(Button b)
 void spawnZombie()
 {
 	if (zombiesSpawned >= ZOMBIE_COUNT) return;
-
 	int i = zombiesSpawned;
+	if (currentLevel == 1)
+		zombieSpeed[i] = 2;
+	else if (currentLevel == 2)
+		zombieSpeed[i] = 3;
+	
 
 	// spawn from edges
 	int edge = rand() % 4;
@@ -162,7 +247,9 @@ void spawnZombie()
 	zState[i] = Z_WANDER;
 	wanderTimer[i] = 0;
 	hearTimer[i] = 0;
-    zombieAngle[i] = 0.0; // default facing
+
+    // default facing
+    zombieAngle[i] = 0.0;
 
 
 	zombiesSpawned++;
@@ -171,53 +258,62 @@ void spawnZombie()
 // Reset the entire game state (used for restart and starting a new game)
 void resetGame()
 {
-    playerX = 200;
-    playerY = 200;
-    playerHP = 100;
-    score = 0;
-    ammo = maxAmmo;
-    gameOver = false;
+	playerX = 200;
+	playerY = 200;
+	playerHP = 100;
+	score = 0;
+	ammo = maxAmmo;
+	gameOver = false;
 
-    currentScreen = SCREEN_GAME;
-    isRunning = false;
-    shootPulseTimer = 0;
-    currentSoundRadius = 0;
-    charFrame = 0;
-    charFrameCounter = 0;
+	currentScreen = SCREEN_GAME;
+	isRunning = false;
+	shootPulseTimer = 0;
+	currentSoundRadius = 0;
+	charFrame = 0;
+	charFrameCounter = 0;
+    gameState = STATE_PLAYING;
+    fadeAlpha = 0;
+    // hide exit
+    exitDoorW = exitDoorH = 0;
 
-    // reset zombies
-    zombiesSpawned = 0;
-    for (int i = 0; i < ZOMBIE_COUNT; i++)
-    {
-        zombieAlive[i] = false;
-        zombieHP[i] = 20;
-        zombieX[i] = 0;
-        zombieY[i] = 0;
-        zombieSize[i] = 30;
-        zombieSpeed[i] = (i < 3) ? 1 : 2;
-        zState[i] = Z_WANDER;
-        wanderTimer[i] = 0;
-        hearTimer[i] = 0;
-        hearX[i] = 0;
-        hearY[i] = 0;
+	// reset zombies
+	zombiesSpawned = 0;
+	for (int i = 0; i < ZOMBIE_COUNT; i++)
+	{
+		zombieAlive[i] = false;
+		zombieHP[i] = 20;
+		zombieX[i] = 0;
+		zombieY[i] = 0;
+		zombieSize[i] = 30;
+		zombieSpeed[i] = (i < 3) ? 1 : 2;
+		zState[i] = Z_WANDER;
+		wanderTimer[i] = 0;
+		hearTimer[i] = 0;
+		hearX[i] = 0;
+		hearY[i] = 0;
         zombieAngle[i] = 0.0;
-    }
+	}
 
-    // reset bullets
-    for (int i = 0; i < MAX_BULLETS; i++)
-    {
-        bulletActive[i] = false;
-        bulletX[i] = 0;
-        bulletY[i] = 0;
-        bulletDX[i] = 0.0;
-        bulletDY[i] = 0.0;
-    }
+	// reset bullets
+	for (int i = 0; i < MAX_BULLETS; i++)
+	{
+		bulletActive[i] = false;
+		bulletX[i] = 0;
+		bulletY[i] = 0;
+		bulletDX[i] = 0.0;
+		bulletDY[i] = 0.0;
+	}
 
-    // spawn initial zombie
-    spawnZombie();
+	// spawn initial zombie
+	spawnZombie();
 
-    mciSendString("stop ggsong", NULL, 0, NULL);
-    mciSendString("play bgsong repeat", NULL, 0, NULL);
+    // reset level progression
+    currentLevel = 1;
+    zombiesKilled = 0;
+    levelTarget = 10;
+
+	mciSendString("stop ggsong", NULL, 0, NULL);
+	mciSendString("play bgsong repeat", NULL, 0, NULL);
 }
 
 // =====================================================
@@ -250,7 +346,7 @@ void drawDarkness()
 
 			if (!insideCone)
 			{
-				iShowImage(0, 0, 0, 0 , backgroundImage2);
+				iShowImage(0, 0, 0, 0, backgroundImage2);
 			}
 		}
 	}
@@ -305,11 +401,17 @@ void iDraw()
 	if (currentScreen == SCREEN_MENU) { drawMenu(); return; }
 	if (currentScreen == SCREEN_SETTINGS) { drawSettings(); return; }
 	if (currentScreen == SCREEN_CREDITS) { drawCredits(); return; }
+	if (currentScreen == SCREEN_WIN) { drawWin(); return; }
 
 	// if we reach here, we are in GAME
 	// (keep your existing game drawing code below)
 
-	iShowImage(0, 0, WIN_W, WIN_H, backgroundImage);
+	//iShowImage(0, 0, WIN_W, WIN_H, backgroundImage);
+
+	if (currentLevel == 1)
+		iShowImage(0, 0, WIN_W, WIN_H, backgroundImage);
+	else if (currentLevel == 2)
+		iShowImage(0, 0, WIN_W, WIN_H, backgroundImage3);
 
 	// movement check (for animation only)
 	bool moving =
@@ -371,17 +473,34 @@ void iDraw()
 	for (int i = 0; i < zombiesSpawned; i++)
 	{
 		if (!zombieAlive[i]) continue;
-        int imgIndex = i % 7;
+		int imgIndex = i % 7;
 
-        // rotate zombie to face its movement direction
-        double angleDeg = zombieAngle[i] * (180.0 / 3.14159265359) - 90.0;
-        glPushMatrix();
-        glTranslatef((float)(zombieX[i] + zombieSize[i] / 2.0), (float)(zombieY[i] + zombieSize[i] / 2.0), 0);
-        glRotatef((float)angleDeg, 0, 0, 1);
-        glTranslatef((float)(-zombieSize[i] / 2.0), (float)(-zombieSize[i] / 2.0), 0);
-        iShowImage(0, 0, zombieSize[i], zombieSize[i], zombieImg[imgIndex]);
-        glPopMatrix();
+		// draw zombie rotated to face movement direction
+		double angDeg = zombieAngle[i] * (180.0 / 3.14159265359) - 90.0;
+		glPushMatrix();
+		glTranslatef((float)(zombieX[i] + zombieSize[i] / 2), (float)(zombieY[i] + zombieSize[i] / 2), 0);
+		glRotatef((float)angDeg, 0, 0, 1);
+		glTranslatef(-(zombieSize[i] / 2.0f), -(zombieSize[i] / 2.0f), 0);
+		iShowImage(0, 0, zombieSize[i], zombieSize[i], zombieImg[imgIndex]);
+		glPopMatrix();
 	}
+
+    // exit door - shown when level cleared and waiting for player to reach it
+    if (gameState == STATE_LEVEL_CLEAR)
+    {
+        if (exitDoorImg != 0)
+        {
+            iShowImage(exitDoorX, exitDoorY, exitDoorW, exitDoorH, exitDoorImg);
+        }
+        else
+        {
+            // fallback: colored box with label
+            iSetColor(120, 60, 20);
+            iFilledRectangle(exitDoorX, exitDoorY, exitDoorW, exitDoorH);
+            iSetColor(255, 255, 255);
+            iText(exitDoorX + 8, exitDoorY + exitDoorH/2 - 6, "EXIT");
+        }
+    }
 
 	// bullets
 	iSetColor(255, 255, 0);
@@ -393,7 +512,11 @@ void iDraw()
 
 	// HUD
 	iSetColor(255, 255, 255);
-	iText(20, 20, "Echos Of The Undying");
+
+	if (currentLevel == 1)
+		iText(20, 20, "RECEPTION ROOM");
+	else if (currentLevel == 2)
+		iText(20, 20, "PATIENT WARD");
 
 	char hpText[50];
 	sprintf(hpText, "HP: %d", playerHP);
@@ -406,6 +529,12 @@ void iDraw()
 	char ammoText[50];
 	sprintf(ammoText, "AMMO: %d", ammo);
 	iText(20, 110, ammoText);
+
+	if (gameState == STATE_LEVEL_CLEAR)
+	{
+		iSetColor(255, 0, 0);
+		iText(200, 230, "ROOM CLEARED", GLUT_BITMAP_TIMES_ROMAN_24);
+	}
 
 	// sound circle
 	if (isRunning && !gameOver)
@@ -420,6 +549,14 @@ void iDraw()
 		iSetColor(255, 0, 0);
 		iText(180, 230, "GAME OVER", GLUT_BITMAP_TIMES_ROMAN_24);
 		iText(220, 200, "Press R to Restart", GLUT_BITMAP_HELVETICA_18);
+		iText(170, 180, "Press M to return to Main Menu", GLUT_BITMAP_HELVETICA_18);
+	}
+
+	if (gameState == STATE_TRANSITION)
+	{
+		iSetColor(0, 0, 0);
+		glColor4f(0, 0, 0, fadeAlpha / 255.0f);
+		iFilledRectangle(0, 0, WIN_W, WIN_H);
 	}
 }
 
@@ -531,10 +668,11 @@ void moveZombieToward(int i, double tx, double ty)
 	double d = sqrt(dx*dx + dy*dy);
 	if (d > 0.001)
 	{
-        // record facing angle based on movement direction
+        // update facing angle to match movement direction
         zombieAngle[i] = atan2(dy, dx);
-		zombieX[i] += (dx / d) * zombieSpeed[i];
-		zombieY[i] += (dy / d) * zombieSpeed[i];
+
+        zombieX[i] += (dx / d) * zombieSpeed[i];
+        zombieY[i] += (dy / d) * zombieSpeed[i];
 	}
 }
 
@@ -580,31 +718,107 @@ void updateZombieAI()
 // =====================================================
 void fixedUpdate()
 {
-    if (currentScreen != SCREEN_GAME)
-    {
-        // allow returning from Settings/Credits by polling key (some environments
-        // may not deliver iKeyboard events reliably). This makes 'B' work
-        // even when not in the game loop.
-        if (currentScreen == SCREEN_SETTINGS || currentScreen == SCREEN_CREDITS)
-        {
-            if (isKeyPressed('b') || isKeyPressed('B'))
-            {
-                currentScreen = SCREEN_MENU;
-                return;
-            }
-        }
+	if (currentScreen != SCREEN_GAME)
+	{
+		// allow returning from Settings/Credits by polling key (some environments
+		// may not deliver iKeyboard events reliably). This makes 'B' work
+		// even when not in the game loop.
+		if (currentScreen == SCREEN_SETTINGS || currentScreen == SCREEN_CREDITS)
+		{
+			if (isKeyPressed('b') || isKeyPressed('B'))
+			{
+				currentScreen = SCREEN_MENU;
+				return;
+			}
+		}
 
-        return;
-    }
+		// On the win screen, also poll keys so environments that don't deliver
+		// iKeyboard will still allow restart or return to menu.
+		if (currentScreen == SCREEN_WIN)
+		{
+			if (isKeyPressed('r') || isKeyPressed('R'))
+			{
+				resetGame();
+				return;
+			}
 
-    // If game over, still poll for restart key so keyboard can restart the game
-    if (gameOver)
-    {
-        if (isKeyPressed('r') || isKeyPressed('R'))
-            resetGame();
-        return;
-    }
+			if (isKeyPressed('m') || isKeyPressed('M'))
+			{
+				currentScreen = SCREEN_MENU;
+				mciSendString("stop ggsong", NULL, 0, NULL);
+				mciSendString("play bgsong repeat", NULL, 0, NULL);
+				return;
+			}
+		}
 
+		return;
+	}
+
+	// If game over, still poll for restart key so keyboard can restart the game
+	if (gameOver)
+	{
+		if (isKeyPressed('r') || isKeyPressed('R'))
+		{
+			resetGame();
+			return;
+		}
+
+		// allow returning to menu by polling M as well
+		if (isKeyPressed('m') || isKeyPressed('M'))
+		{
+			currentScreen = SCREEN_MENU;
+			mciSendString("stop ggsong", NULL, 0, NULL);
+			mciSendString("play bgsong repeat", NULL, 0, NULL);
+			return;
+		}
+
+		return;
+	}
+
+	// ================= LEVEL CLEAR FREEZE =================
+
+	if (gameState == STATE_TRANSITION)
+	{
+		fadeAlpha += 5;
+		if (fadeAlpha >= 255)
+		{
+			// If we finished the final level, show win screen
+			if (currentLevel >= FINAL_LEVEL)
+			{
+				// stop gameplay and show win screen
+				currentScreen = SCREEN_WIN;
+				// stop background and play gameover/win sound
+				mciSendString("stop bgsong", NULL, 0, NULL);
+				mciSendString("play ggsong", NULL, 0, NULL);
+				// clear zombies
+				for (int i = 0; i < ZOMBIE_COUNT; i++)
+					zombieAlive[i] = false;
+				zombiesSpawned = 0;
+				zombiesKilled = 0;
+			}
+			else
+			{
+				currentLevel++;       // go to next level
+				zombiesKilled = 0;
+				zombiesSpawned = 0;
+				levelTarget += 10;    // harder
+
+				for (int i = 0; i < ZOMBIE_COUNT; i++)
+					zombieAlive[i] = false;
+
+				playerX = 200;
+				playerY = 200;
+
+				gameState = STATE_PLAYING;
+
+				// spawn first zombie for new level
+				spawnZombie();
+			}
+		}
+		return;
+	}
+
+    // (Transition handled above; removed duplicate handler)
 	// ----- STRICT CONTROLS -----
 	bool shiftHeld = (GetKeyState(VK_LSHIFT) & 0x8000) || (GetKeyState(VK_RSHIFT) & 0x8000);
 	bool wWalk = (!shiftHeld) && isKeyPressed('w');
@@ -724,11 +938,18 @@ void fixedUpdate()
 				zombieHP[j] -= 50;
 				bulletActive[i] = false;
 
+			/*	if (zombieHP[j] <= 0)
+				{
+					zombieAlive[j] = false;
+					score += 10;
+				}*/
 				if (zombieHP[j] <= 0)
 				{
 					zombieAlive[j] = false;
 					score += 10;
+					zombiesKilled++;   // count kill
 				}
+
 				break;
 			}
 		}
@@ -768,6 +989,41 @@ void fixedUpdate()
 			}
 		}
 	}
+
+	// ================= LEVEL COMPLETE CHECK =================
+	/*if (currentLevel == 1 && zombiesKilled >= ZOMBIE_COUNT)
+	{
+		gameState = STATE_LEVEL_CLEAR;
+		transitionTimer = 200;   // 2 seconds (if update is 10ms)
+	}*/
+
+    // ================= LEVEL COMPLETE CHECK =================
+    // When the required number of zombies are killed, reveal an exit door.
+    // The player must reach the exit to trigger the level transition.
+    if (zombiesKilled >= levelTarget)
+    {
+        if (gameState != STATE_LEVEL_CLEAR && gameState != STATE_TRANSITION)
+        {
+            gameState = STATE_LEVEL_CLEAR;
+            // pick a (random) door position for this level/playthrough
+            placeExitDoorForLevel(currentLevel);
+        }
+    }
+
+    // If player reaches the exit while level is cleared, start transition
+    if (gameState == STATE_LEVEL_CLEAR)
+    {
+        bool hitX = playerX < exitDoorX + exitDoorW && playerX + playerSize > exitDoorX;
+        bool hitY = playerY < exitDoorY + exitDoorH && playerY + playerSize > exitDoorY;
+
+        if (hitX && hitY)
+        {
+            // begin fade to next level
+            fadeAlpha = 0;
+            gameState = STATE_TRANSITION;
+        }
+    }
+
 }
 
 
@@ -776,21 +1032,33 @@ void fixedUpdate()
 // =====================================================
 void iKeyboard(unsigned char key)
 {
-    // Allow returning from Settings screen by pressing B
-    if ((key == 'b' || key == 'B') && currentScreen == SCREEN_SETTINGS)
+	// Allow returning from Settings screen by pressing B
+	if ((key == 'b' || key == 'B') && currentScreen == SCREEN_SETTINGS)
+	{
+		currentScreen = SCREEN_MENU;
+		return;
+	}
+
+    // Restart when player is dead or when on win screen
+    if (key == 'r' || key == 'R')
     {
-        currentScreen = SCREEN_MENU;
+        if (gameOver || currentScreen == SCREEN_WIN)
+        {
+            // use centralized reset
+            resetGame();
+        }
         return;
     }
 
-	if (key == 'r' || key == 'R')
-	{
-		if (gameOver)
-		{
-			// use centralized reset
-			resetGame();
-		}
-	}
+    // Return to main menu when dead or after win
+    if ((key == 'm' || key == 'M') && (gameOver || currentScreen == SCREEN_WIN))
+    {
+        currentScreen = SCREEN_MENU;
+        // ensure background music is playing
+        mciSendString("stop ggsong", NULL, 0, NULL);
+        mciSendString("play bgsong repeat", NULL, 0, NULL);
+        return;
+    }
 }
 
 // =====================================================
@@ -809,13 +1077,14 @@ int main()
 
 	// init arrays
 	for (int i = 0; i < MAX_BULLETS; i++) bulletActive[i] = false;
-    for (int i = 0; i < ZOMBIE_COUNT; i++) { zombieAlive[i] = false; zombieAngle[i] = 0.0; }
+	for (int i = 0; i < ZOMBIE_COUNT; i++) zombieAlive[i] = false;
 
 	iInitialize(WIN_W, WIN_H, "Hospital Horror Game");
 
 	// load images
 	backgroundImage = iLoadImage("Images\\bg1.png");
 	backgroundImage2 = iLoadImage("Images\\bg2.png");
+	backgroundImage3 = iLoadImage("Images\\bg3.png");
 
 	charImg[0] = iLoadImage("Images\\run1.png");
 	charImg[1] = iLoadImage("Images\\run2.png");
@@ -831,6 +1100,9 @@ int main()
 	zombieImg[4] = iLoadImage("Images\\zombie5.png");
 	zombieImg[5] = iLoadImage("Images\\zombie6.png");
 	zombieImg[6] = iLoadImage("Images\\zombie7.png");
+
+    // exit door image (optional)
+    exitDoorImg = iLoadImage("Images\\exit-door.png");
 
 	// timers
 	iSetTimer(1000, spawnZombie); // every 1 sec
