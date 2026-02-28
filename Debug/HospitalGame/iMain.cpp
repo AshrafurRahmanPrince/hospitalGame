@@ -97,6 +97,9 @@ int ammo = 10;
 int maxAmmo = 10;
 int score = 0;
 
+// per-zombie facing angle (radians)
+double zombieAngle[ZOMBIE_COUNT];
+
 
 // ================= SCREEN / MENU =================
 enum Screen { SCREEN_MENU, SCREEN_GAME, SCREEN_SETTINGS, SCREEN_CREDITS };
@@ -159,6 +162,7 @@ void spawnZombie()
 	zState[i] = Z_WANDER;
 	wanderTimer[i] = 0;
 	hearTimer[i] = 0;
+    zombieAngle[i] = 0.0; // default facing
 
 
 	zombiesSpawned++;
@@ -196,6 +200,7 @@ void resetGame()
         hearTimer[i] = 0;
         hearX[i] = 0;
         hearY[i] = 0;
+        zombieAngle[i] = 0.0;
     }
 
     // reset bullets
@@ -366,8 +371,16 @@ void iDraw()
 	for (int i = 0; i < zombiesSpawned; i++)
 	{
 		if (!zombieAlive[i]) continue;
-		int imgIndex = i % 7;
-		iShowImage((int)zombieX[i], (int)zombieY[i], zombieSize[i], zombieSize[i], zombieImg[imgIndex]);
+        int imgIndex = i % 7;
+
+        // rotate zombie to face its movement direction
+        double angleDeg = zombieAngle[i] * (180.0 / 3.14159265359) - 90.0;
+        glPushMatrix();
+        glTranslatef((float)(zombieX[i] + zombieSize[i] / 2.0), (float)(zombieY[i] + zombieSize[i] / 2.0), 0);
+        glRotatef((float)angleDeg, 0, 0, 1);
+        glTranslatef((float)(-zombieSize[i] / 2.0), (float)(-zombieSize[i] / 2.0), 0);
+        iShowImage(0, 0, zombieSize[i], zombieSize[i], zombieImg[imgIndex]);
+        glPopMatrix();
 	}
 
 	// bullets
@@ -518,6 +531,8 @@ void moveZombieToward(int i, double tx, double ty)
 	double d = sqrt(dx*dx + dy*dy);
 	if (d > 0.001)
 	{
+        // record facing angle based on movement direction
+        zombieAngle[i] = atan2(dy, dx);
 		zombieX[i] += (dx / d) * zombieSpeed[i];
 		zombieY[i] += (dy / d) * zombieSpeed[i];
 	}
@@ -794,7 +809,7 @@ int main()
 
 	// init arrays
 	for (int i = 0; i < MAX_BULLETS; i++) bulletActive[i] = false;
-	for (int i = 0; i < ZOMBIE_COUNT; i++) zombieAlive[i] = false;
+    for (int i = 0; i < ZOMBIE_COUNT; i++) { zombieAlive[i] = false; zombieAngle[i] = 0.0; }
 
 	iInitialize(WIN_W, WIN_H, "Hospital Horror Game");
 
