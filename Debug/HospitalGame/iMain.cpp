@@ -145,6 +145,32 @@ bool isInside(int mx, int my, Button b)
 	return (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h);
 }
 
+// Map OS/client mouse coordinates to the game's logical coordinate system
+// so input works correctly when the window is resized.
+void mapClientToGameCoords(int inMx, int inMy, int &outX, int &outY)
+{
+    POINT p;
+    HWND hwnd = FindWindow(NULL, "Hospital Horror Game");
+    if (hwnd && GetCursorPos(&p))
+    {
+        ScreenToClient(hwnd, &p);
+        RECT rc; GetClientRect(hwnd, &rc);
+        int clientW = rc.right - rc.left;
+        int clientH = rc.bottom - rc.top;
+        if (clientW <= 0) clientW = WIN_W;
+        if (clientH <= 0) clientH = WIN_H;
+        float sx = (float)WIN_W / (float)clientW;
+        float sy = (float)WIN_H / (float)clientH;
+        outX = (int)(p.x * sx);
+        outY = (int)((clientH - p.y) * sy);
+    }
+    else
+    {
+        outX = inMx;
+        outY = inMy;
+    }
+}
+
 void drawWin()
 {
     iSetColor(0, 0, 0);
@@ -565,13 +591,12 @@ void iDraw()
 // =====================================================
 void iMouseMove(int mx, int my)
 {
-	mouseX = mx;
-	mouseY = my;
+    mapClientToGameCoords(mx, my, mouseX, mouseY);
 
-	int cx = playerX + playerSize / 2;
-	int cy = playerY + playerSize / 2;
+    int cx = playerX + playerSize / 2;
+    int cy = playerY + playerSize / 2;
 
-	viewAngle = atan2((double)(mouseY - cy), (double)(mouseX - cx));
+    viewAngle = atan2((double)(mouseY - cy), (double)(mouseX - cx));
 }
 
 void iPassiveMouseMove(int mx, int my)
@@ -581,57 +606,66 @@ void iPassiveMouseMove(int mx, int my)
 
 void iMouse(int button, int state, int mx, int my)
 {
-	// ================= MENU CLICK =================
-	if (currentScreen == SCREEN_MENU &&
-		button == GLUT_LEFT_BUTTON && state == GLUT_DOWN)
-	{
-		if (isInside(mx, my, btnPlay))
-		{
-			// start a fresh game when Play is clicked
-			resetGame();
-		}
-		else if (isInside(mx, my, btnSettings))
-		{
-			currentScreen = SCREEN_SETTINGS;
-		}
-		else if (isInside(mx, my, btnCredits))
-		{
-			currentScreen = SCREEN_CREDITS;
-		}
-		else if (isInside(mx, my, btnQuit))
-		{
-			mciSendString("stop bgsong", NULL, 0, NULL);
-			mciSendString("stop ggsong", NULL, 0, NULL);
-			exit(0);
-		}
-		return;
-	}
+    int gmx, gmy;
+    mapClientToGameCoords(mx, my, gmx, gmy);
 
-	// ================= GAME MOUSE (SHOOT) =================
-	if (currentScreen == SCREEN_GAME &&
-		button == GLUT_LEFT_BUTTON && state == GLUT_DOWN && !gameOver)
-	{
-		if (ammo <= 0) return;
-		ammo--;
+    // ================= MENU CLICK =================
+    if (currentScreen == SCREEN_MENU &&
+        button == GLUT_LEFT_BUTTON && state == GLUT_DOWN)
+    {
+        if (isInside(gmx, gmy, btnPlay))
+        {
+            // start a fresh game when Play is clicked
+            resetGame();
+        }
+        else if (isInside(gmx, gmy, btnSettings))
+        {
+            currentScreen = SCREEN_SETTINGS;
+        }
+        else if (isInside(gmx, gmy, btnCredits))
+        {
+            currentScreen = SCREEN_CREDITS;
+        }
+        else if (isInside(gmx, gmy, btnQuit))
+        {
+            mciSendString("stop bgsong", NULL, 0, NULL);
+            mciSendString("stop ggsong", NULL, 0, NULL);
+            exit(0);
+        }
+        return;
+    }
 
-		// 🔊 Shooting sound pulse (big radius for a short time)
-		shootPulseTimer = SHOOT_PULSE_DURATION;
+    // ================= GAME MOUSE (SHOOT) =================
+    if (currentScreen == SCREEN_GAME &&
+        button == GLUT_LEFT_BUTTON && state == GLUT_DOWN && !gameOver)
+    {
+        // Use the already-computed game mouse coords (gmx/gmy)
+        mouseX = gmx; mouseY = gmy;
+        int cx = playerX + playerSize / 2;
+        int cy = playerY + playerSize / 2;
+        viewAngle = atan2((double)(mouseY - cy), (double)(mouseX - cx));
 
-		for (int i = 0; i < MAX_BULLETS; i++)
-		{
-			if (!bulletActive[i])
-			{
-				bulletActive[i] = true;
-				bulletX[i] = playerX + playerSize / 2;
-				bulletY[i] = playerY + playerSize / 2;
+        if (ammo <= 0) return;
+        ammo--;
 
-				bulletDX[i] = cos(viewAngle);
-				bulletDY[i] = sin(viewAngle);
-				break;
-			}
-		}
-		return;
-	}
+        // 🔊 Shooting sound pulse (big radius for a short time)
+        shootPulseTimer = SHOOT_PULSE_DURATION;
+
+        for (int i = 0; i < MAX_BULLETS; i++)
+        {
+            if (!bulletActive[i])
+            {
+                bulletActive[i] = true;
+                bulletX[i] = playerX + playerSize / 2;
+                bulletY[i] = playerY + playerSize / 2;
+
+                bulletDX[i] = cos(viewAngle);
+                bulletDY[i] = sin(viewAngle);
+                break;
+            }
+        }
+        return;
+    }
 }
 
 
