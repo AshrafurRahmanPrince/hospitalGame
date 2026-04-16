@@ -1,0 +1,2162 @@
+﻿#include "iGraphics.h"
+
+#include <windows.h>   // SHIFT detection
+#include <mmsystem.h>  // mciSendString
+#pragma comment(lib, "winmm.lib")
+
+#include <math.h>
+#include <stdlib.h>    // rand, srand
+#include <time.h>      // time
+#include <ctype.h>
+#include <vector>
+
+// ================= WINDOW =================
+const int WIN_W = 600;
+const int WIN_H = 400;
+
+//int backgroundImage1;
+
+const int TOTAL_ROOMS = 5;   // 1 old + 4 new
+int backgroundImage[TOTAL_ROOMS];
+
+int currentRoom = 0;         // starts from room 0
+int charImg[6];
+
+
+int zombieImg[7];
+
+// ================= MOUSE =================
+int mouseX = 0, mouseY = 0;
+double viewAngle = 0.0;     // radians
+
+// ================= TUNING CONSTANTS =================
+const int PLAYER_SPEED_WALK = 3;
+const int PLAYER_SPEED_RUN = 6;
+const int ZOMBIE_SPEED_L1 = 2;
+const int ZOMBIE_SPEED_L2 = 3;
+
+const int BASE_ZOMBIE_SPEED = 1;
+const int RUNNER_SPEED = 3;
+int BASE_SPAWN_RATE = 1000; // ms
+const int WAVE_INTERVAL = 20; // Seconds per wave escalation
+
+// ================= PLAYER =================
+int playerX = 200;
+int playerY = 200;
+int playerSize = 30;
+
+int playerHP = 100;
+bool gameOver = false;
+
+// animation
+int charFrame = 0;
+int charFrameSpeed = 5;
+int charFrameCounter = 0;
+// Time-based animation: advance player frame every 150 ms
+int charFrameTimerMs = 0;
+const int CHAR_FRAME_INTERVAL_MS = 150; // 150ms per frame
+
+// ================= RUN / SOUND =================
+bool isRunning = false;
+int soundRadius = 0;
+
+// ================= ZOMBIES =================
+const int ZOMBIE_COUNT = 50;
+int zombiesSpawned = 0;
+
+double zombieX[ZOMBIE_COUNT];
+double zombieY[ZOMBIE_COUNT];
+int zombieSize[ZOMBIE_COUNT];
+int zombieSpeed[ZOMBIE_COUNT];
+int zombieHP[ZOMBIE_COUNT];
+bool zombieAlive[ZOMBIE_COUNT];
+int zombieType[ZOMBIE_COUNT]; // 0 = Walker, 1 = Runner
+
+// Per-zombie movement velocity (used to determine facing)
+double zombieDX[ZOMBIE_COUNT];
+double zombieDY[ZOMBIE_COUNT];
+double zombieAngle[ZOMBIE_COUNT]; // radians, heading direction
+
+// ================= ZOMBIE AI =================
+enum ZState { Z_WANDER, Z_INVESTIGATE };
+
+ZState zState[ZOMBIE_COUNT];
+
+double wanderTX[ZOMBIE_COUNT];   // target x for wandering
+double wanderTY[ZOMBIE_COUNT];   // target y for wandering
+
+int wanderTimer[ZOMBIE_COUNT];   // when timer ends, pick a new target
+
+double hearX[ZOMBIE_COUNT];      // investigation target x
+double hearY[ZOMBIE_COUNT];      // investigation target y
+int hearTimer[ZOMBIE_COUNT];     // how long to keep investigating
+
+
+// ================= SOUND SYSTEM =================
+int walkRadius = 50;     // small
+int runRadius = 120;    // bigger
+int shootRadius = 180;   // biggest (pulse)
+
+int currentSoundRadius = 0;
+
+// shooting pulse lasts for short time
+int shootPulseTimer = 0;          // counts down in update ticks
+const int SHOOT_PULSE_DURATION = 12; // ~ 12*20ms = 240ms if fixedUpdate every 20ms
+
+
+// ================= BULLETS =================
+const int MAX_BULLETS = 10;
+
+// ================= TORCH (always active) =================
+const double PI = 3.14159265358979323846;
+int torchRadius = 250;           // pixels
+double torchAngleDeg = 45.0;     // cone angle in degrees
+
+int bulletX[MAX_BULLETS];
+int bulletY[MAX_BULLETS];
+bool bulletActive[MAX_BULLETS];
+
+double bulletDX[MAX_BULLETS];
+double bulletDY[MAX_BULLETS];
+
+int bulletSpeed = 30;
+
+// ================= AMMO / SCORE =================
+int ammo = 10;
+int maxAmmo = 10;
+int score = 0;
+
+// ================= STAMINA & ITEMS =================
+const int MAX_STAMINA = 100;
+const int STAMINA_DRAIN = 2;
+const int STAMINA_REGEN = 1;
+int playerStamina = MAX_STAMINA;
+int damageFlashTimer = 0;
+
+const int MAX_ITEMS = 15;
+double itemX[MAX_ITEMS];
+double itemY[MAX_ITEMS];
+int itemType[MAX_ITEMS]; // 0 = Ammo, 1 = Medkit
+bool itemActive[MAX_ITEMS];
+
+// ================= OBSTACLES =================
+struct Obstacle {
+	std::vector<double> vx;
+	std::vector<double> vy;
+	int r, g, b;    // color
+	float a;        // opacity (0.0 - 1.0)
+};
+
+// obstacles per room
+std::vector<std::vector<Obstacle>> roomObstacles;
+
+
+// ================= SCREEN / MENU =================
+enum Screen { SCREEN_MENU, SCREEN_GAME, SCREEN_DEATH, SCREEN_SETTINGS, SCREEN_CREDITS, SCREEN_PAUSE };
+Screen currentScreen = SCREEN_MENU;
+
+// Menu Globals
+int musicVolume = 100;
+int sfxVolume = 100;
+enum Difficulty { DIFF_EASY, DIFF_NORMAL, DIFF_HARD };
+Difficulty currentDifficulty = DIFF_NORMAL;
+
+// ================= GAME FLOW STATE =================
+enum GameState { STATE_PLAYING, STATE_LEVEL_CLEAR, STATE_TRANSITION };
+GameState gameState = STATE_PLAYING;
+
+int transitionTimer = 0;
+int fadeAlpha = 0;
+
+
+// ================= LEVEL SYSTEM & OBJECTIVES =================
+int currentLevel = 1;
+int zombiesKilled = 0;
+int framesSurvived = 0;     // Time survived in the current level
+int waveNumber = 1;         // Escalates difficulty within a level
+int waveTimer = 0;          // Tracks time until next wave
+int spawnTimerCounter = 0;  // Tracks when to spawn next zombie
+
+// Objective States
+bool hasKeycard = false;
+bool doorUnlocked = false;
+bool genActive = false;
+bool npcRescued = false;
+
+// Fixed Coordinates
+int keyX = 50, keyY = 320;
+int doorX = 550, doorY = 180;
+int genX = 520, genY = 320;
+int npcX = 80, npcY = 80;
+
+// UI Popup Text
+char popupText[64] = "";
+int popupTimer = 0;
+
+
+// Simple button struct
+struct Button {
+	int x, y, w, h;
+	const char* text;
+	bool isHovered;
+};
+
+// Main Menu Buttons
+Button btnPlay = { 220, 240, 160, 40, "PLAY", false };
+Button btnSettings = { 220, 190, 160, 40, "SETTINGS", false };
+Button btnCredits = { 220, 140, 160, 40, "CREDITS", false };
+Button btnQuit = { 220, 90, 160, 40, "QUIT", false };
+
+// Settings Buttons
+Button btnDiffEasy = { 150, 200, 80, 40, "EASY", false };
+Button btnDiffNormal = { 250, 200, 100, 40, "NORMAL", false };
+Button btnDiffHard = { 370, 200, 80, 40, "HARD", false };
+Button btnVolMusicDec = { 200, 140, 40, 30, "-", false };
+Button btnVolMusicInc = { 320, 140, 40, 30, "+", false };
+Button btnVolSfxDec = { 200, 90, 40, 30, "-", false };
+Button btnVolSfxInc = { 320, 90, 40, 30, "+", false };
+Button btnBack = { 20, 20, 100, 40, "BACK", false };
+
+// Pause Buttons
+Button btnPauseResume = { 220, 240, 160, 40, "RESUME", false };
+Button btnPauseRestart = { 220, 190, 160, 40, "RESTART", false };
+Button btnPauseMenu = { 220, 140, 160, 40, "MAIN MENU", false };
+
+// Death Screen Buttons (shown when player dies)
+Button btnDeathRetry = { 220, 220, 160, 40, "RETRY LEVEL", false };
+Button btnDeathMenu = { 220, 170, 160, 40, "MAIN MENU", false };
+
+// Obstacle Editor UI Buttons (fixed positions)
+Button btnEditorAdd = { 430, 350, 140, 30, "ADD POLYGON", false };
+Button btnEditorFinish = { 430, 315, 140, 30, "FINISH POLY", false };
+Button btnEditorDelete = { 430, 280, 140, 30, "DELETE", false };
+Button btnEditorClear = { 430, 245, 140, 30, "CLEAR ALL", false };
+Button btnEditorClose = { 430, 210, 140, 30, "CLOSE EDITOR", false };
+
+// Editor state
+bool obstacleEditorActive = false;
+bool editorAdding = false; // true when adding vertices for a new polygon
+std::vector<double> editorTempVx;
+std::vector<double> editorTempVy;
+int editorSelected = -1; // selected obstacle index in current room
+
+bool isInside(int mx, int my, Button b)
+{
+	return (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h);
+}
+
+// forward declaration for drawButton because drawDeathScreen uses it
+void drawButton(Button b);
+// forward declaration for drawing obstacles
+// forward declaration for drawing obstacles
+void drawObstacles();
+void drawEditorUI();
+// forward declarations for obstacle-safe spawn helpers
+bool findFreePlayerPosition(int startX, int startY, int &outX, int &outY);
+void ensurePlayerNotInObstacle();
+
+void drawDeathScreen()
+{
+	// draw main menu style background
+	iSetColor(61, 12, 2);
+	iFilledRectangle(0, 0, WIN_W, WIN_H);
+
+	// Replace the title with GAME OVER (no red color here)
+	iSetColor(255, 255, 255);
+	iText(180, 330, "GAME OVER", GLUT_BITMAP_TIMES_ROMAN_24);
+
+	// Draw death options
+	drawButton(btnDeathRetry);
+	drawButton(btnDeathMenu);
+}
+
+// Helper: treat letter key down regardless of shift (lower or upper)
+bool isKeyDownChar(char c)
+{
+    char up = (char)toupper((unsigned char)c);
+	// Use GetAsyncKeyState for more reliable, immediate key state checks
+	return ((GetAsyncKeyState((int)up) & 0x8000) != 0) || ((GetAsyncKeyState((int)c) & 0x8000) != 0);
+}
+
+// Map window (current glut window) coordinates to fixed game coordinates (WIN_W x WIN_H)
+void mapWindowToGame(int wx, int wy, int &gx, int &gy)
+{
+    // Prefer precise client coords via Win32 to handle window decorations and DPI.
+    POINT p;
+    if (GetCursorPos(&p))
+    {
+        HWND hwnd = GetForegroundWindow();
+        if (hwnd != NULL)
+        {
+            RECT rc;
+            if (GetClientRect(hwnd, &rc))
+            {
+                // convert screen coords to client coords
+                POINT cp = p;
+                ScreenToClient(hwnd, &cp);
+
+                int clientW = rc.right - rc.left;
+                int clientH = rc.bottom - rc.top;
+                if (clientW <= 0 || clientH <= 0) { gx = wx; gy = wy; return; }
+
+                // Map client (top-left origin) to game virtual coords.
+                // iGraphics/game uses bottom-left origin, so invert Y here.
+                gx = (int)((double)cp.x * WIN_W / clientW);
+                gy = WIN_H - (int)((double)cp.y * WIN_H / clientH);
+                return;
+            }
+        }
+    }
+
+    // Fallback to GLUT scaling if Win32 path fails
+    int wndW = glutGet(GLUT_WINDOW_WIDTH);
+    int wndH = glutGet(GLUT_WINDOW_HEIGHT);
+    if (wndW <= 0 || wndH <= 0) { gx = wx; gy = wy; return; }
+    gx = (int)((double)wx * WIN_W / wndW);
+    gy = WIN_H - (int)((double)wy * WIN_H / wndH);
+}
+
+// Extracted interaction handling so it can be triggered from both event and polled input
+void handleInteract()
+{
+    if (currentScreen != SCREEN_GAME || gameOver) return;
+
+    double cx = playerX + playerSize / 2.0;
+    double cy = playerY + playerSize / 2.0;
+
+    // 1) Objective Checks
+    if (currentLevel == 2)
+    {
+        if (!hasKeycard && sqrt((cx - keyX)*(cx - keyX) + (cy - keyY)*(cy - keyY)) < 40)
+        {
+            hasKeycard = true;
+            strcpy(popupText, "Keycard Collected!");
+            popupTimer = 100;
+        }
+        else if (hasKeycard && !doorUnlocked && sqrt((cx - doorX)*(cx - doorX) + (cy - doorY)*(cy - doorY)) < 50)
+        {
+            doorUnlocked = true;
+            strcpy(popupText, "Door Unlocked");
+            popupTimer = 100;
+            gameState = STATE_TRANSITION; // Trigger level 3
+        }
+        else if (!hasKeycard && sqrt((cx - doorX)*(cx - doorX) + (cy - doorY)*(cy - doorY)) < 50)
+        {
+            strcpy(popupText, "Locked. Need Keycard!");
+            popupTimer = 60;
+        }
+    }
+    else if (currentLevel == 3)
+    {
+        if (!genActive && sqrt((cx - genX)*(cx - genX) + (cy - genY)*(cy - genY)) < 50)
+        {
+            genActive = true;
+            BASE_SPAWN_RATE -= 300; // Generator attracts horde
+            strcpy(popupText, "Generator ON! Find Survivor!");
+            popupTimer = 150;
+        }
+        if (genActive && !npcRescued && sqrt((cx - npcX)*(cx - npcX) + (cy - npcY)*(cy - npcY)) < 50)
+        {
+            npcRescued = true;
+            strcpy(popupText, "Survivor Rescued! Escape!");
+            popupTimer = 150;
+        }
+        if (npcRescued && sqrt((cx - doorX)*(cx - doorX) + (cy - doorY)*(cy - doorY)) < 50)
+        {
+            strcpy(popupText, "YOU SURVIVED ALL ROOMS!");
+            popupTimer = 500;
+            gameOver = true;
+            strcpy(popupText, "VICTORY!");
+            popupTimer = 500;
+        }
+        else if (!npcRescued && sqrt((cx - doorX)*(cx - doorX) + (cy - doorY)*(cy - doorY)) < 50)
+        {
+            strcpy(popupText, "Must rescue survivor first!");
+            popupTimer = 60;
+        }
+    }
+
+    // 2) Drop Item Checks
+    for (int i = 0; i < MAX_ITEMS; i++)
+    {
+        if (itemActive[i])
+        {
+            double dist = sqrt((cx - itemX[i])*(cx - itemX[i]) + (cy - itemY[i])*(cy - itemY[i]));
+            if (dist < 50) // Interaction radius
+            {
+                if (itemType[i] == 0) ammo += 10;
+                else if (itemType[i] == 1) playerHP = (playerHP + 25 > 100) ? 100 : playerHP + 25;
+                itemActive[i] = false;
+                break; // Pick up only one item per press
+            }
+        }
+    }
+}
+
+void updateButtonHover(Button &b, int mx, int my)
+{
+	b.isHovered = isInside(mx, my, b);
+}
+
+void drawButton(Button b)
+{
+	if (b.isHovered) {
+		iSetColor(100, 100, 100); // Highlight color
+	} else {
+		iSetColor(40, 40, 40);    // Default color
+	}
+	iFilledRectangle(b.x, b.y, b.w, b.h);
+
+	iSetColor(255, 255, 255);
+	iRectangle(b.x, b.y, b.w, b.h);
+
+	// Center text manually (approximate)
+	int textX = b.x + (b.w / 2) - strlen(b.text) * 4;
+	int textY = b.y + (b.h / 2) - 5;
+	iText(textX, textY, (char*)b.text);
+}
+
+
+
+
+// =====================================================
+// SPAWN ZOMBIE
+// =====================================================
+void spawnZombie()
+{
+	if (zombiesSpawned >= ZOMBIE_COUNT) return;
+	int i = zombiesSpawned;
+	
+	int baseSpeed = BASE_ZOMBIE_SPEED;
+	if (currentLevel >= 2) baseSpeed++;
+	
+	// Determine Type (Runners appear in Level 2+ or high wave)
+	int type = 0; // default Walker
+	if (currentLevel >= 2 && (rand() % 100 < 30)) type = 1; // 30% chance of Runner in Lv2
+	if (currentLevel >= 3 && (rand() % 100 < 50)) type = 1; // 50% chance in Lv3
+
+	zombieType[i] = type;
+	
+	if (type == 1) 
+	{
+		zombieSpeed[i] = RUNNER_SPEED + (waveNumber-1);
+		zombieHP[i] = 10;
+	}
+	else 
+	{
+		zombieSpeed[i] = baseSpeed;
+		if (currentDifficulty == DIFF_NORMAL) zombieSpeed[i] += 1;
+		else if (currentDifficulty == DIFF_HARD) zombieSpeed[i] += 2;
+		zombieHP[i] = 20;
+	}
+	
+	// spawn from edges
+	int edge = rand() % 4;
+	switch (edge)
+	{
+	case 0: zombieX[i] = 0;     zombieY[i] = rand() % WIN_H; break;
+	case 1: zombieX[i] = WIN_W; zombieY[i] = rand() % WIN_H; break;
+	case 2: zombieX[i] = rand() % WIN_W; zombieY[i] = 0;     break;
+	case 3: zombieX[i] = rand() % WIN_W; zombieY[i] = WIN_H; break;
+	}
+
+	zombieSize[i] = 30;
+	zombieAlive[i] = true;
+
+	// initialize movement/heading
+	zombieDX[i] = 0.0;
+	zombieDY[i] = 0.0;
+	zombieAngle[i] = 0.0;
+
+	zState[i] = Z_WANDER;
+	wanderTimer[i] = 0;
+	hearTimer[i] = 0;
+
+	zombiesSpawned++;
+}
+
+// Reset the entire game state (used for restart and starting a new game)
+void resetGame()
+{
+	playerX = 200;
+	playerY = 200;
+	// Ensure player spawn not inside obstacle
+	ensurePlayerNotInObstacle();
+	playerHP = 100;
+	score = 0;
+	ammo = maxAmmo;
+	gameOver = false;
+
+	currentScreen = SCREEN_GAME;
+	isRunning = false;
+	shootPulseTimer = 0;
+	currentSoundRadius = 0;
+	charFrame = 0;
+	charFrameCounter = 0;
+	charFrameTimerMs = 0;
+	
+	framesSurvived = 0;
+	waveNumber = 1;
+	waveTimer = WAVE_INTERVAL * 100;
+	BASE_SPAWN_RATE = 1000;
+	
+	hasKeycard = false;
+	doorUnlocked = false;
+	genActive = false;
+	npcRescued = false;
+	popupTimer = 0;
+	
+	zombiesSpawned = 0;
+	for (int i = 0; i < ZOMBIE_COUNT; i++)
+	{
+		zombieAlive[i] = false;
+		zombieHP[i] = 20;
+		zombieX[i] = 0;
+		zombieY[i] = 0;
+		zombieSize[i] = 30;
+
+		// reset velocity and facing
+		zombieDX[i] = 0.0;
+		zombieDY[i] = 0.0;
+		zombieAngle[i] = 0.0;
+		if (currentLevel == 1)
+			zombieSpeed[i] = ZOMBIE_SPEED_L1;
+		else
+			zombieSpeed[i] = ZOMBIE_SPEED_L2;
+		zState[i] = Z_WANDER;
+		wanderTimer[i] = 0;
+		hearTimer[i] = 0;
+		hearX[i] = 0;
+		hearY[i] = 0;
+	}
+
+	// reset stamina & items
+	playerStamina = MAX_STAMINA;
+	damageFlashTimer = 0;
+	for (int i = 0; i < MAX_ITEMS; i++) itemActive[i] = false;
+
+	// reset bullets
+	for (int i = 0; i < MAX_BULLETS; i++)
+	{
+		bulletActive[i] = false;
+		bulletX[i] = 0;
+		bulletY[i] = 0;
+		bulletDX[i] = 0.0;
+		bulletDY[i] = 0.0;
+	}
+
+	// spawn initial zombie
+	spawnZombie();
+
+	mciSendString("stop ggsong", NULL, 0, NULL);
+	mciSendString("play bgsong repeat", NULL, 0, NULL);
+
+	// clear death screen hover states
+	btnDeathRetry.isHovered = false;
+	btnDeathMenu.isHovered = false;
+}
+
+// =====================================================
+// DRAW
+// =====================================================
+
+void drawMenu()
+{
+	iSetColor(61, 12, 2);
+	iFilledRectangle(0, 0, WIN_W, WIN_H);
+
+	iSetColor(255, 255, 255);
+	iText(180, 330, "Echos Of The Undying", GLUT_BITMAP_TIMES_ROMAN_24);
+	iText(210, 300, "Best of Luck", GLUT_BITMAP_HELVETICA_18);
+
+	drawButton(btnPlay);
+	drawButton(btnSettings);
+	drawButton(btnCredits);
+	drawButton(btnQuit);
+
+	iText(130, 30, "Mouse: Aim | Arrows: Move | Shift: Sprint | Click: Shoot");
+}
+
+void drawSettings()
+{
+	iSetColor(30, 30, 30);
+	iFilledRectangle(0, 0, WIN_W, WIN_H);
+
+	iSetColor(255, 255, 255);
+	iText(240, 340, "SETTINGS", GLUT_BITMAP_TIMES_ROMAN_24);
+	
+	iText(150, 260, "Difficulty:");
+	
+	// Highlight selected difficulty
+	if (currentDifficulty == DIFF_EASY) iSetColor(0, 255, 0); else iSetColor(255, 255, 255);
+	iRectangle(btnDiffEasy.x - 2, btnDiffEasy.y - 2, btnDiffEasy.w + 4, btnDiffEasy.h + 4);
+	if (currentDifficulty == DIFF_NORMAL) iSetColor(255, 255, 0); else iSetColor(255, 255, 255);
+	iRectangle(btnDiffNormal.x - 2, btnDiffNormal.y - 2, btnDiffNormal.w + 4, btnDiffNormal.h + 4);
+	if (currentDifficulty == DIFF_HARD) iSetColor(255, 0, 0); else iSetColor(255, 255, 255);
+	iRectangle(btnDiffHard.x - 2, btnDiffHard.y - 2, btnDiffHard.w + 4, btnDiffHard.h + 4);
+
+	drawButton(btnDiffEasy);
+	drawButton(btnDiffNormal);
+	drawButton(btnDiffHard);
+
+	iSetColor(255, 255, 255);
+	iText(100, 150, "Music:");
+	drawButton(btnVolMusicDec);
+	char mVol[10]; sprintf(mVol, "%d", musicVolume);
+	iText(260, 150, mVol);
+	drawButton(btnVolMusicInc);
+
+	iSetColor(255, 255, 255);
+	iText(100, 100, "SFX:");
+	drawButton(btnVolSfxDec);
+	char sVol[10]; sprintf(sVol, "%d", sfxVolume);
+	iText(260, 100, sVol);
+	drawButton(btnVolSfxInc);
+
+	drawButton(btnBack);
+}
+
+void drawCredits()
+{
+	iSetColor(20, 20, 20);
+	iFilledRectangle(0, 0, WIN_W, WIN_H);
+
+	iSetColor(255, 255, 255);
+	iText(250, 330, "CREDITS", GLUT_BITMAP_TIMES_ROMAN_24);
+	
+	iSetColor(200, 200, 200);
+	iText(180, 260, "Lead Developer: Prince");
+	iText(180, 220, "Game Designer: Sakib");
+	iText(180, 180, "Art & Audio: Rishad");
+	
+	iText(130, 100, "Assets: OpenGameArt.org / Custom Sprites");
+
+	drawButton(btnBack);
+}
+
+void drawPause()
+{
+	iSetColor(0, 0, 0);
+	iFilledRectangle(0, 0, WIN_W, WIN_H); // Darker background
+
+	iSetColor(255, 255, 255);
+	iText(240, 320, "PAUSED", GLUT_BITMAP_TIMES_ROMAN_24);
+
+	drawButton(btnPauseResume);
+	drawButton(btnPauseRestart);
+	drawButton(btnPauseMenu);
+}
+
+
+
+void iDraw()
+{
+	iClear();
+
+	if (currentScreen == SCREEN_MENU) { drawMenu(); return; }
+	if (currentScreen == SCREEN_SETTINGS) { drawSettings(); return; }
+	if (currentScreen == SCREEN_CREDITS) { drawCredits(); return; }
+	if (currentScreen == SCREEN_PAUSE) { drawPause(); return; }
+
+    // if we reach here, we are in GAME, or other in-game overlays
+	// (keep your existing game drawing code below)
+
+	// 1) Draw bgDark full screen
+	iShowImage(0, 0, WIN_W, WIN_H, backgroundImage[currentRoom]);
+
+	// movement check (for animation only)
+    bool moving =
+		isKeyDownChar('w') || isKeyDownChar('a') || isKeyDownChar('s') || isKeyDownChar('d') ||
+		((GetAsyncKeyState(VK_UP) & 0x8000) != 0) || ((GetAsyncKeyState(VK_DOWN) & 0x8000) != 0) ||
+		((GetAsyncKeyState(VK_LEFT) & 0x8000) != 0) || ((GetAsyncKeyState(VK_RIGHT) & 0x8000) != 0);
+
+	if (moving && !gameOver)
+	{
+		// Animation now driven by fixedUpdate time-based timer (charFrameTimerMs)
+		// Keep iDraw lightweight; frame progression happens in fixedUpdate.
+	}
+	else
+	{
+		charFrame = 0;
+	}
+
+	// player sprite (draw ONCE) - rotated to face mouse cursor
+
+	// draw obstacles (before entities so they appear under entities)
+	drawObstacles();
+
+	// Editor overlay UI
+	if (obstacleEditorActive)
+	{
+		drawEditorUI();
+
+		// draw temp polygon if adding
+		if (editorAdding && editorTempVx.size() > 0)
+		{
+			glEnable(GL_BLEND);
+			glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+			glColor4f(1, 0, 0, 0.4f);
+			glBegin(GL_POLYGON);
+			for (size_t i = 0; i < editorTempVx.size(); i++) glVertex2d(editorTempVx[i], editorTempVy[i]);
+			glEnd();
+			glDisable(GL_BLEND);
+		}
+
+		// highlight selected
+		if (editorSelected >= 0 && editorSelected < (int)roomObstacles[currentRoom].size())
+		{
+			const Obstacle &sel = roomObstacles[currentRoom][editorSelected];
+			glColor3f(1,1,0);
+			glBegin(GL_LINE_LOOP);
+			for (size_t i = 0; i < sel.vx.size(); i++) glVertex2d(sel.vx[i], sel.vy[i]);
+			glEnd();
+		}
+	}
+
+	double viewAngleDegrees = viewAngle * (180.0 / 3.14159265359) - 90.0;
+	glPushMatrix();
+	glTranslatef(playerX + playerSize / 2.0f, playerY + playerSize / 2.0f, 0);
+	glRotatef(viewAngleDegrees, 0, 0, 1);
+	glTranslatef(-(playerSize / 2.0f), -(playerSize / 2.0f), 0);
+	iShowImage(0, 0, playerSize, playerSize, charImg[charFrame]);
+	glPopMatrix();
+
+    // Torch cone (always active) - draw a soft warm cone in the facing direction
+    {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        // Warm soft light (RGBA) - low alpha so it acts like illumination, not opaque
+        glColor4f(1.0f, 0.95f, 0.7f, 0.18f);
+
+        double halfAngle = (torchAngleDeg * PI / 180.0) * 0.5;
+        int segments = 36;
+        double cx = playerX + playerSize / 2.0;
+        double cy = playerY + playerSize / 2.0;
+
+        glBegin(GL_TRIANGLE_FAN);
+        glVertex2d(cx, cy);
+        for (int s = 0; s <= segments; s++)
+        {
+            double t = (double)s / (double)segments;
+            double ang = viewAngle - halfAngle + t * (2.0 * halfAngle);
+            double vx = cx + cos(ang) * (double)torchRadius;
+            double vy = cy + sin(ang) * (double)torchRadius;
+            glVertex2d(vx, vy);
+        }
+        glEnd();
+
+        // restore color/blend
+        glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+        glDisable(GL_BLEND);
+    }
+
+	// zombies
+	for (int i = 0; i < zombiesSpawned; i++)
+	{
+		if (!zombieAlive[i]) continue;
+		int imgIndex = i % 7;
+		// rotate zombie to face its movement direction
+		double angDeg = zombieAngle[i] * (180.0 / 3.14159265359) - 90.0;
+		glPushMatrix();
+		glTranslatef((GLfloat)(zombieX[i] + zombieSize[i] / 2.0), (GLfloat)(zombieY[i] + zombieSize[i] / 2.0), 0);
+		glRotatef((GLfloat)angDeg, 0, 0, 1);
+		glTranslatef((GLfloat)(-zombieSize[i] / 2.0), (GLfloat)(-zombieSize[i] / 2.0), 0);
+		iShowImage(0, 0, zombieSize[i], zombieSize[i], zombieImg[imgIndex]);
+		glPopMatrix();
+	}
+
+	// bullets
+	iSetColor(255, 255, 0);
+	for (int i = 0; i < MAX_BULLETS; i++)
+	{
+		if (bulletActive[i])
+			iFilledCircle(bulletX[i], bulletY[i], 4);
+	}
+
+	// HUD
+	iSetColor(255, 255, 255);
+
+	if (currentLevel == 1)
+	{
+		iText(20, 20, "RECEPTION (Survive 60s)");
+		if (gameState == STATE_PLAYING) iText(WIN_W/2 - 50, WIN_H - 25, "OBJ: Survive");
+	}
+	else if (currentLevel == 2)
+	{
+		iText(20, 20, "WARD (Find Key & Exit)");
+		if (gameState == STATE_PLAYING) 
+		{
+			if (!hasKeycard) iText(WIN_W/2 - 80, WIN_H - 25, "OBJ: Find Keycard");
+			else iText(WIN_W/2 - 80, WIN_H - 25, "OBJ: Escape through Door");
+		}
+	}
+	else
+	{
+		iText(20, 20, "BASEMENT (Rescue & Escape)");
+		if (gameState == STATE_PLAYING) 
+		{
+			if (!genActive) iText(WIN_W/2 - 80, WIN_H - 25, "OBJ: Turn on Generator");
+			else if (!npcRescued) iText(WIN_W/2 - 80, WIN_H - 25, "OBJ: Rescue Survivor");
+			else iText(WIN_W/2 - 80, WIN_H - 25, "OBJ: Escape through Door");
+		}
+	}
+
+	char timeText[50];
+	int secondsAlive = framesSurvived / 100;
+	
+	int winTarget = 60; // default L1
+	if (currentLevel == 2) winTarget = 90;
+	if (currentLevel >= 3) winTarget = 120;
+	
+	sprintf(timeText, "TIME: %d / %d", secondsAlive, winTarget);
+	iText(180, 20, timeText, GLUT_BITMAP_HELVETICA_18);
+	
+	char waveText[50];
+	sprintf(waveText, "WAVE: %d", waveNumber);
+	iText(350, 20, waveText, GLUT_BITMAP_HELVETICA_18);
+
+	char hpText[50];
+	sprintf(hpText, "HP: %d", playerHP);
+	iText(20, 80, hpText);
+
+	char scoreText[50];
+	sprintf(scoreText, "SCORE: %d", score);
+	iText(20, 50, scoreText);
+
+	char ammoText[50];
+	sprintf(ammoText, "AMMO: %d", ammo);
+	iText(20, 110, ammoText);
+
+	// ================= HP BAR =================
+	iSetColor(100, 100, 100); // background
+	iFilledRectangle(20, 160, 100, 12);
+
+	// Color changes based on HP
+	if (playerHP > 60)
+		iSetColor(0, 255, 0);       // Green
+	else if (playerHP > 30)
+		iSetColor(255, 165, 0);     // Orange
+	else
+		iSetColor(255, 0, 0);       // Red
+
+	iFilledRectangle(20, 160, playerHP, 12);
+
+	iSetColor(255, 255, 255);
+	iRectangle(20, 160, 100, 12);
+	iText(20, 175, "HEALTH");
+
+
+	// Stamina Bar
+	iSetColor(100, 100, 100);
+	iFilledRectangle(20, 130, 100, 10);
+	iSetColor(0, 200, 255);
+	iFilledRectangle(20, 130, playerStamina, 10);
+	iSetColor(255, 255, 255);
+	iRectangle(20, 130, 100, 10);
+	iText(20, 145, "STAMINA");
+
+	// Draw Items
+	for (int i = 0; i < MAX_ITEMS; i++)
+	{
+		if (!itemActive[i]) continue;
+		if (itemType[i] == 0) // Ammo (Blue Box)
+		{
+			iSetColor(50, 50, 255);
+			iFilledRectangle((int)itemX[i], (int)itemY[i], 15, 15);
+			iSetColor(255, 255, 255);
+			iRectangle((int)itemX[i], (int)itemY[i], 15, 15);
+		}
+		else if (itemType[i] == 1) // Medkit (Green Box with Cross)
+		{
+			iSetColor(50, 200, 50);
+			iFilledRectangle((int)itemX[i], (int)itemY[i], 15, 15);
+			iSetColor(255, 255, 255);
+			iRectangle((int)itemX[i], (int)itemY[i], 15, 15);
+			iFilledRectangle((int)itemX[i] + 6, (int)itemY[i] + 3, 3, 9);
+			iFilledRectangle((int)itemX[i] + 3, (int)itemY[i] + 6, 9, 3);
+		}
+	}
+
+	// ================= DRAW OBJECTIVES =================
+	if (currentLevel == 2)
+	{
+		if (!hasKeycard) 
+		{
+			iSetColor(255, 215, 0); // Gold Key
+			iFilledRectangle(keyX, keyY, 12, 8);
+		}
+		
+		// Door
+		if (doorUnlocked) iSetColor(0, 255, 0); else iSetColor(255, 0, 0);
+		iFilledRectangle(doorX, doorY, 10, 40);
+	}
+	else if (currentLevel == 3)
+	{
+		// Generator
+		if (genActive) iSetColor(0, 255, 255); else iSetColor(100, 100, 100);
+		iFilledRectangle(genX, genY, 30, 30);
+		
+		// NPC
+		if (!npcRescued && genActive) 
+		{
+			iSetColor(200, 150, 100);
+			iFilledCircle(npcX + 10, npcY + 10, 10);
+		}
+		
+		// Exit Door
+		if (npcRescued) iSetColor(0, 255, 0); else iSetColor(255, 0, 0);
+		iFilledRectangle(doorX, doorY, 10, 40);
+	}
+
+	if (popupTimer > 0)
+	{
+		iSetColor(255, 255, 0);
+		iText(playerX - 20, playerY + 40, popupText);
+		popupTimer--;
+	}
+
+	if (gameState == STATE_LEVEL_CLEAR)
+	{
+		iSetColor(255, 0, 0);
+		iText(200, 230, "ROOM CLEARED", GLUT_BITMAP_TIMES_ROMAN_24);
+	}
+
+	// sound circle
+	if (isRunning && !gameOver)
+	{
+		iSetColor(255, 0, 0);
+		iCircle(playerX + playerSize / 2, playerY + playerSize / 2, soundRadius);
+	}
+
+    // Draw death screen as a separate screen overlay (no damage flash here)
+	if (currentScreen == SCREEN_DEATH)
+	{
+		drawDeathScreen();
+	}
+
+	if (gameState == STATE_TRANSITION)
+	{
+		iSetColor(0, 0, 0);
+		glColor4f(0, 0, 0, fadeAlpha / 255.0f);
+		iFilledRectangle(0, 0, WIN_W, WIN_H);
+	}
+
+    // Damage flash should not show on death screen
+	if (damageFlashTimer > 0 && currentScreen != SCREEN_DEATH)
+	{
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		glColor4f(1.0f, 0.0f, 0.0f, 0.4f);
+		iFilledRectangle(0, 0, WIN_W, WIN_H);
+		glDisable(GL_BLEND);
+	}
+}
+
+void drawEditorUI()
+{
+	// panel background
+	iSetColor(20,20,20);
+	iFilledRectangle(420, 200, 160, 200);
+
+	// Draw buttons
+	drawButton(btnEditorAdd);
+	drawButton(btnEditorFinish);
+	drawButton(btnEditorDelete);
+	drawButton(btnEditorClear);
+	drawButton(btnEditorClose);
+
+	// instructions
+	iSetColor(255,255,255);
+	iText(430, 190, "Obstacle Editor");
+	iText(430, 175, "- ADD POLYGON: start drawing");
+	iText(430, 160, "- FINISH POLY: commit polygon");
+	iText(430, 145, "- Click empty area to select");
+	iText(430, 130, "- DELETE: deletes selected");
+}
+
+// =====================================================
+// MOUSE
+// =====================================================
+void iMouseMove(int mx, int my)
+{
+    // Map from window coords to game coords so mouse works when window is resized
+    int gx, gy;
+    mapWindowToGame(mx, my, gx, gy);
+
+    mouseX = gx;
+    mouseY = gy;
+
+    if (currentScreen == SCREEN_GAME)
+    {
+        int cx = playerX + playerSize / 2;
+        int cy = playerY + playerSize / 2;
+
+        viewAngle = atan2((double)(mouseY - cy), (double)(mouseX - cx));
+    }
+}
+
+void iPassiveMouseMove(int mx, int my)
+{
+    // Map coords and update internal mouse pos first
+    iMouseMove(mx, my);
+
+    // Use mapped mouseX/mouseY (game coords) for UI hit tests so buttons work when resized
+    int mxg = mouseX;
+    int myg = mouseY;
+
+    // Update GUI Button hovers
+    if (currentScreen == SCREEN_MENU)
+    {
+        updateButtonHover(btnPlay, mxg, myg);
+        updateButtonHover(btnSettings, mxg, myg);
+        updateButtonHover(btnCredits, mxg, myg);
+        updateButtonHover(btnQuit, mxg, myg);
+    }
+    else if (currentScreen == SCREEN_SETTINGS)
+    {
+        updateButtonHover(btnDiffEasy, mxg, myg);
+        updateButtonHover(btnDiffNormal, mxg, myg);
+        updateButtonHover(btnDiffHard, mxg, myg);
+        updateButtonHover(btnVolMusicDec, mxg, myg);
+        updateButtonHover(btnVolMusicInc, mxg, myg);
+        updateButtonHover(btnVolSfxDec, mxg, myg);
+        updateButtonHover(btnVolSfxInc, mxg, myg);
+        updateButtonHover(btnBack, mxg, myg);
+    }
+    else if (currentScreen == SCREEN_CREDITS)
+    {
+        updateButtonHover(btnBack, mxg, myg);
+    }
+    else if (currentScreen == SCREEN_PAUSE)
+    {
+        updateButtonHover(btnPauseResume, mxg, myg);
+        updateButtonHover(btnPauseRestart, mxg, myg);
+        updateButtonHover(btnPauseMenu, mxg, myg);
+    }
+
+	// Editor UI hovers
+	if (obstacleEditorActive)
+	{
+		updateButtonHover(btnEditorAdd, mxg, myg);
+		updateButtonHover(btnEditorFinish, mxg, myg);
+		updateButtonHover(btnEditorDelete, mxg, myg);
+		updateButtonHover(btnEditorClear, mxg, myg);
+		updateButtonHover(btnEditorClose, mxg, myg);
+	}
+
+    // Death screen hover checks
+	if (currentScreen == SCREEN_DEATH)
+	{
+		updateButtonHover(btnDeathRetry, mxg, myg);
+		updateButtonHover(btnDeathMenu, mxg, myg);
+	}
+}
+
+void iMouse(int button, int state, int mx, int my)
+{
+    if (button != GLUT_LEFT_BUTTON || state != GLUT_DOWN) return;
+
+    // Map click coords to game space so UI and interactions work when window resized
+    int gx, gy;
+    mapWindowToGame(mx, my, gx, gy);
+
+
+    // ================= MENU CLICK =================
+    if (currentScreen == SCREEN_MENU)
+    {
+        if (isInside(gx, gy, btnPlay)) resetGame();
+        else if (isInside(gx, gy, btnSettings)) currentScreen = SCREEN_SETTINGS;
+        else if (isInside(gx, gy, btnCredits)) currentScreen = SCREEN_CREDITS;
+        else if (isInside(gx, gy, btnQuit)) exit(0);
+    }
+	// ================= SETTINGS CLICK =================
+    else if (currentScreen == SCREEN_SETTINGS)
+    {
+        if (isInside(gx, gy, btnDiffEasy)) currentDifficulty = DIFF_EASY;
+        else if (isInside(gx, gy, btnDiffNormal)) currentDifficulty = DIFF_NORMAL;
+        else if (isInside(gx, gy, btnDiffHard)) currentDifficulty = DIFF_HARD;
+        else if (isInside(gx, gy, btnVolMusicDec) && musicVolume > 0) musicVolume -= 10;
+        else if (isInside(gx, gy, btnVolMusicInc) && musicVolume < 100) musicVolume += 10;
+        else if (isInside(gx, gy, btnVolSfxDec) && sfxVolume > 0) sfxVolume -= 10;
+        else if (isInside(gx, gy, btnVolSfxInc) && sfxVolume < 100) sfxVolume += 10;
+        else if (isInside(gx, gy, btnBack)) currentScreen = SCREEN_MENU;
+    }
+	// ================= CREDITS CLICK =================
+    else if (currentScreen == SCREEN_CREDITS)
+    {
+        if (isInside(gx, gy, btnBack)) currentScreen = SCREEN_MENU;
+    }
+	// ================= PAUSE CLICK =================
+    else if (currentScreen == SCREEN_PAUSE)
+    {
+        if (isInside(gx, gy, btnPauseResume)) currentScreen = SCREEN_GAME;
+        else if (isInside(gx, gy, btnPauseRestart)) resetGame();
+        else if (isInside(gx, gy, btnPauseMenu)) currentScreen = SCREEN_MENU;
+    }
+
+	// Editor UI clicks (when active) - editor is modal over game
+	if (obstacleEditorActive)
+	{
+		if (isInside(gx, gy, btnEditorAdd))
+		{
+			editorAdding = true;
+			editorTempVx.clear(); editorTempVy.clear();
+			return;
+		}
+		else if (isInside(gx, gy, btnEditorFinish))
+		{
+			if (editorAdding && editorTempVx.size() >= 3)
+			{
+				Obstacle o;
+				o.vx = editorTempVx;
+				o.vy = editorTempVy;
+				o.r = 255; o.g = 0; o.b = 0; o.a = 0.3f;
+				roomObstacles[currentRoom].push_back(o);
+			}
+			editorAdding = false;
+			editorTempVx.clear(); editorTempVy.clear();
+			return;
+		}
+		else if (isInside(gx, gy, btnEditorDelete))
+		{
+			if (editorSelected >= 0 && editorSelected < (int)roomObstacles[currentRoom].size())
+			{
+				roomObstacles[currentRoom].erase(roomObstacles[currentRoom].begin() + editorSelected);
+				editorSelected = -1;
+			}
+			return;
+		}
+		else if (isInside(gx, gy, btnEditorClear))
+		{
+			roomObstacles[currentRoom].clear();
+			editorSelected = -1;
+			return;
+		}
+		else if (isInside(gx, gy, btnEditorClose))
+		{
+			obstacleEditorActive = false;
+			editorAdding = false;
+			editorTempVx.clear(); editorTempVy.clear();
+			return;
+		}
+	}
+	// ================= GAME MOUSE (SHOOT) =================
+	else if (currentScreen == SCREEN_GAME && !gameOver)
+	{
+      // If editor active, add points instead of shooting
+		if (obstacleEditorActive)
+		{
+			int gx2, gy2; mapWindowToGame(mx, my, gx2, gy2);
+			if (editorAdding)
+			{
+				editorTempVx.push_back(gx2);
+				editorTempVy.push_back(gy2);
+			}
+			else
+			{
+				// select obstacle under mouse
+				editorSelected = -1;
+				for (size_t oi = 0; oi < roomObstacles[currentRoom].size(); oi++)
+				{
+					if (pointInPolygon(gx2, gy2, roomObstacles[currentRoom][oi]))
+					{
+						editorSelected = (int)oi; break;
+					}
+				}
+			}
+			return;
+		}
+
+		if (ammo <= 0) return;
+		ammo--;
+
+		// 🔊 Shooting sound pulse (big radius for a short time)
+		shootPulseTimer = SHOOT_PULSE_DURATION;
+
+		for (int i = 0; i < MAX_BULLETS; i++)
+		{
+			if (!bulletActive[i])
+			{
+				bulletActive[i] = true;
+				bulletX[i] = playerX + playerSize / 2;
+				bulletY[i] = playerY + playerSize / 2;
+
+				bulletDX[i] = cos(viewAngle);
+				bulletDY[i] = sin(viewAngle);
+				break;
+			}
+		}
+		return;
+	}
+
+    // Death screen clicks
+	else if (currentScreen == SCREEN_DEATH)
+	{
+		if (isInside(gx, gy, btnDeathRetry))
+		{
+			int savedLevel = currentLevel;
+			int savedRoom = currentRoom;
+			resetGame();
+			currentLevel = savedLevel;
+			currentRoom = savedRoom;
+			currentScreen = SCREEN_GAME;
+			gameOver = false;
+			// restart background music
+			mciSendString("stop ggsong", NULL, 0, NULL);
+			mciSendString("play bgsong repeat", NULL, 0, NULL);
+			return;
+		}
+		else if (isInside(gx, gy, btnDeathMenu))
+		{
+			currentScreen = SCREEN_MENU;
+			gameOver = false;
+			// restart menu music
+			mciSendString("stop ggsong", NULL, 0, NULL);
+			mciSendString("play bgsong repeat", NULL, 0, NULL);
+			return;
+		}
+	}
+}
+
+
+double dist2(double ax, double ay, double bx, double by)
+{
+	double dx = ax - bx;
+	double dy = ay - by;
+	return dx*dx + dy*dy;
+}
+
+// =====================================================
+// OBSTACLE UTILITIES
+// =====================================================
+
+bool pointInPolygon(double x, double y, const Obstacle &o)
+{
+	bool inside = false;
+	int n = (int)o.vx.size();
+	for (int i = 0, j = n - 1; i < n; j = i++)
+	{
+		double xi = o.vx[i], yi = o.vy[i];
+		double xj = o.vx[j], yj = o.vy[j];
+
+		bool intersect = ((yi > y) != (yj > y)) &&
+			(x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi);
+		if (intersect) inside = !inside;
+	}
+	return inside;
+}
+
+// segment intersection (helper)
+double orient(double ax, double ay, double bx, double by, double cx, double cy)
+{
+	return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+}
+
+bool segIntersectsSeg(double x1,double y1,double x2,double y2,double x3,double y3,double x4,double y4)
+{
+	double d1 = orient(x1,y1,x2,y2,x3,y3);
+	double d2 = orient(x1,y1,x2,y2,x4,y4);
+	double d3 = orient(x3,y3,x4,y4,x1,y1);
+	double d4 = orient(x3,y3,x4,y4,x2,y2);
+
+	if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+		((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)))
+		return true;
+
+	return false;
+}
+
+bool rectIntersectsObstacle(double rx, double ry, double rw, double rh, const Obstacle &o)
+{
+	// Rectangle corners
+	double rx1 = rx, ry1 = ry;
+	double rx2 = rx + rw, ry2 = ry;
+	double rx3 = rx + rw, ry3 = ry + rh;
+	double rx4 = rx, ry4 = ry + rh;
+
+	// 1) any corner inside polygon
+	if (pointInPolygon(rx1, ry1, o)) return true;
+	if (pointInPolygon(rx2, ry2, o)) return true;
+	if (pointInPolygon(rx3, ry3, o)) return true;
+	if (pointInPolygon(rx4, ry4, o)) return true;
+
+	// 2) any polygon edge intersects any rectangle edge
+	int n = (int)o.vx.size();
+	for (int i = 0; i < n; i++)
+	{
+		int j = (i + 1) % n;
+		double px1 = o.vx[i], py1 = o.vy[i];
+		double px2 = o.vx[j], py2 = o.vy[j];
+
+		if (segIntersectsSeg(px1,py1,px2,py2,rx1,ry1,rx2,ry2)) return true;
+		if (segIntersectsSeg(px1,py1,px2,py2,rx2,ry2,rx3,ry3)) return true;
+		if (segIntersectsSeg(px1,py1,px2,py2,rx3,ry3,rx4,ry4)) return true;
+		if (segIntersectsSeg(px1,py1,px2,py2,rx4,ry4,rx1,ry1)) return true;
+	}
+
+	return false;
+}
+
+// Circle vs polygon collision: smoother for round entities
+double sqr(double x) { return x*x; }
+
+// distance squared from point c to segment a-b
+double dist2PointSegment(double px, double py, double ax, double ay, double bx, double by)
+{
+	double vx = bx - ax;
+	double vy = by - ay;
+	double wx = px - ax;
+	double wy = py - ay;
+
+	double c1 = vx*wx + vy*wy;
+	if (c1 <= 0) return sqr(px - ax) + sqr(py - ay);
+
+	double c2 = vx*vx + vy*vy;
+	if (c2 <= c1) return sqr(px - bx) + sqr(py - by);
+
+	double t = c1 / c2;
+	double projx = ax + t * vx;
+	double projy = ay + t * vy;
+	return sqr(px - projx) + sqr(py - projy);
+}
+
+bool circleIntersectsObstacle(double cx, double cy, double cr, const Obstacle &o)
+{
+	// if center inside polygon -> intersects
+	if (pointInPolygon(cx, cy, o)) return true;
+
+	int n = (int)o.vx.size();
+	double r2 = cr*cr;
+	for (int i = 0; i < n; i++)
+	{
+		int j = (i + 1) % n;
+		double ax = o.vx[i], ay = o.vy[i];
+		double bx = o.vx[j], by = o.vy[j];
+
+		// if distance from center to segment <= r -> intersects
+		if (dist2PointSegment(cx, cy, ax, ay, bx, by) <= r2) return true;
+
+		// optional: check vertices
+		if (sqr(cx - ax) + sqr(cy - ay) <= r2) return true;
+		if (sqr(cx - bx) + sqr(cy - by) <= r2) return true;
+	}
+
+	return false;
+}
+
+bool circleIntersectsAnyObstacle(double cx, double cy, double cr)
+{
+	if (roomObstacles.size() <= (size_t)currentRoom) return false;
+	for (const auto &o : roomObstacles[currentRoom])
+	{
+		if (circleIntersectsObstacle(cx, cy, cr, o)) return true;
+	}
+	return false;
+}
+
+// Find nearest free player position (top-left coords) starting from given px,py
+bool findFreePlayerPosition(int startX, int startY, int &outX, int &outY)
+{
+	double pr = playerSize * 0.5;
+	double startCX = startX + pr;
+	double startCY = startY + pr;
+
+	// if starting position is already free
+	if (!circleIntersectsAnyObstacle(startCX, startCY, pr))
+	{
+		outX = startX; outY = startY; return true;
+	}
+
+	const int maxR = 400;
+	const int step = 5;
+	for (int r = step; r <= maxR; r += step)
+	{
+		for (int a = 0; a < 360; a += 36)
+		{
+			double ang = a * (3.14159265358979323846 / 180.0);
+			double cx = startCX + r * cos(ang);
+			double cy = startCY + r * sin(ang);
+
+			// convert to top-left and clamp to bounds
+			int tx = (int)(cx - pr);
+			int ty = (int)(cy - pr);
+			if (tx < 0) tx = 0;
+			if (ty < 0) ty = 0;
+			if (tx + playerSize > WIN_W) tx = WIN_W - playerSize;
+			if (ty + playerSize > WIN_H) ty = WIN_H - playerSize;
+
+			double tcx = tx + pr;
+			double tcy = ty + pr;
+
+			if (!circleIntersectsAnyObstacle(tcx, tcy, pr))
+			{
+				outX = tx; outY = ty; return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+void ensurePlayerNotInObstacle()
+{
+	int nx, ny;
+	if (findFreePlayerPosition(playerX, playerY, nx, ny))
+	{
+		playerX = nx; playerY = ny;
+	}
+	// otherwise leave as-is (no free spot found)
+}
+
+void drawObstacles()
+{
+    if (roomObstacles.size() <= (size_t)currentRoom) return;
+	for (const auto &o : roomObstacles[currentRoom])
+	{
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		glColor4f(o.r / 255.0f, o.g / 255.0f, o.b / 255.0f, o.a);
+		glBegin(GL_POLYGON);
+		for (size_t i = 0; i < o.vx.size(); i++)
+			glVertex2d(o.vx[i], o.vy[i]);
+		glEnd();
+
+		// outline
+		glColor4f(1, 0, 0, o.a);
+		glBegin(GL_LINE_LOOP);
+		for (size_t i = 0; i < o.vx.size(); i++)
+			glVertex2d(o.vx[i], o.vy[i]);
+		glEnd();
+
+		glDisable(GL_BLEND);
+	}
+}
+
+void makeSoundEvent(int sx, int sy, int radius)
+{
+	int r2 = radius * radius;
+
+	for (int i = 0; i < zombiesSpawned; i++)
+	{
+		if (!zombieAlive[i]) continue;
+
+		if (dist2(zombieX[i], zombieY[i], sx, sy) <= r2)
+		{
+			zState[i] = Z_INVESTIGATE;
+			hearX[i] = sx;
+			hearY[i] = sy;
+			hearTimer[i] = 80; // how long they stay interested (~1.6s if 20ms update)
+		}
+	}
+}
+
+void moveZombieToward(int i, double tx, double ty)
+{
+	double dx = tx - zombieX[i];
+	double dy = ty - zombieY[i];
+
+	double d = sqrt(dx*dx + dy*dy);
+	if (d > 0.001)
+	{
+        // compute velocity vector (magnitude = speed)
+        double vx = (dx / d) * zombieSpeed[i];
+        double vy = (dy / d) * zombieSpeed[i];
+
+        // apply movement
+        zombieX[i] += vx;
+        zombieY[i] += vy;
+
+        // store velocity for facing
+        zombieDX[i] = vx;
+        zombieDY[i] = vy;
+
+        // update facing angle based on velocity
+        zombieAngle[i] = atan2(zombieDY[i], zombieDX[i]);
+	}
+}
+
+void updateZombieAI()
+{
+	for (int i = 0; i < zombiesSpawned; i++)
+	{
+		if (!zombieAlive[i]) continue;
+
+		if (zState[i] == Z_INVESTIGATE)
+		{
+			// move to last heard position
+			moveZombieToward(i, hearX[i], hearY[i]);
+
+			// reduce interest timer
+			hearTimer[i]--;
+			if (hearTimer[i] <= 0)
+			{
+				zState[i] = Z_WANDER;
+				wanderTimer[i] = 0; // force new wander target
+			}
+		}
+		else // Z_WANDER
+		{
+			wanderTimer[i]--;
+			if (wanderTimer[i] <= 0)
+			{
+				// pick random point in the map
+				wanderTX[i] = rand() % WIN_W;
+				wanderTY[i] = rand() % WIN_H;
+				wanderTimer[i] = 100 + (rand() % 120); // wander for a bit
+			}
+
+			moveZombieToward(i, wanderTX[i], wanderTY[i]);
+		}
+	}
+}
+
+
+
+// =====================================================
+// UPDATE
+// =====================================================
+void fixedUpdate()
+{
+    // Poll for certain keys (edge-detect) so event callbacks are not the only
+    // way to trigger important actions (ESC pause, interact, reload, restart)
+    static bool prevEsc = false, prevE = false, prevQ = false, prevR = false, prevB = false;
+
+    bool escDown = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+    if (escDown && !prevEsc)
+    {
+        if (currentScreen == SCREEN_GAME) currentScreen = SCREEN_PAUSE;
+        else if (currentScreen == SCREEN_PAUSE) currentScreen = SCREEN_GAME;
+    }
+    prevEsc = escDown;
+
+    bool eDown = (GetAsyncKeyState('E') & 0x8000) != 0;
+    if (eDown && !prevE) handleInteract();
+    prevE = eDown;
+
+    bool qDown = (GetAsyncKeyState('Q') & 0x8000) != 0;
+    if (qDown && !prevQ && currentScreen == SCREEN_GAME && !gameOver) ammo = maxAmmo;
+    prevQ = qDown;
+
+    bool rDown = (GetAsyncKeyState('R') & 0x8000) != 0;
+    if (rDown && !prevR)
+    {
+        // R key no longer restarts; death screen buttons handle restart/menu
+    }
+    prevR = rDown;
+
+    bool bDown = (GetAsyncKeyState('B') & 0x8000) != 0;
+    if (bDown && !prevB)
+    {
+        if (currentScreen == SCREEN_SETTINGS || currentScreen == SCREEN_CREDITS) currentScreen = SCREEN_MENU;
+    }
+    prevB = bDown;
+
+    if (currentScreen != SCREEN_GAME) return;
+
+	// If game over, do not poll R to restart; display death screen overlay handled in iDraw
+	if (gameOver)
+	{
+		return;
+	}
+
+	// ================= PROGRESSION TIMER & SPAWNING =================
+	if (gameState == STATE_PLAYING && !gameOver)
+	{
+		if (damageFlashTimer > 0) damageFlashTimer--;
+		
+		framesSurvived++;
+		
+		int winTarget = 60; // Level 1 is 60s
+		if (currentLevel == 2) winTarget = 300; // Objective based, not strictly time based
+		if (currentLevel >= 3) winTarget = 300; // Objective based
+		
+		// Sub-Level Wave Escalation
+		if (framesSurvived % (WAVE_INTERVAL * 100) == 0)
+		{
+			waveNumber++;
+
+			BASE_SPAWN_RATE -= 150;
+			if (BASE_SPAWN_RATE < 200) BASE_SPAWN_RATE = 200;
+
+			// ✅ AFTER 3 WAVES → CHANGE ROOM
+			if (waveNumber == 4)
+			{
+				gameState = STATE_TRANSITION;
+			}
+		}
+		
+		// Custom Spawn Rate Logic (Replacement for fixed 1000ms iSetTimer)
+		// Because fixedUpdate ticks ~10ms, BASE_SPAWN_RATE/10 gives ticks needed.
+		spawnTimerCounter++;
+		if (spawnTimerCounter >= (BASE_SPAWN_RATE / 10))
+		{
+			spawnZombie();
+			spawnTimerCounter = 0;
+		}
+
+	
+
+
+	}
+
+	// ================= TRANSITION FADE =================
+	if (gameState == STATE_TRANSITION)
+	{
+		fadeAlpha += 5;
+
+		if (fadeAlpha >= 255)
+		{
+			//currentLevel++;
+			currentRoom++;
+
+			if (currentRoom >= TOTAL_ROOMS)
+			{
+				gameOver = true;   // All rooms finished
+				return;
+			}
+			zombiesKilled = 0;
+			zombiesSpawned = 0;
+			framesSurvived = 0;
+			waveNumber = 1;
+			BASE_SPAWN_RATE = 1000;
+			
+			if (currentLevel > 3) currentLevel = 3; // Cap at Lv3 for now
+
+			for (int i = 0; i < ZOMBIE_COUNT; i++)
+				zombieAlive[i] = false;
+
+			playerX = 200;
+			playerY = 200;
+
+			gameState = STATE_PLAYING;
+			spawnZombie(); // first zombie
+			fadeAlpha = 0; // reset fade immediately
+		}
+		return;
+	}
+
+	// ----- STRICT CONTROLS -----
+	bool shiftHeld = ((GetAsyncKeyState(VK_LSHIFT) & 0x8000) != 0) || ((GetAsyncKeyState(VK_RSHIFT) & 0x8000) != 0);
+	bool wWalk = (!shiftHeld) && isKeyDownChar('w');
+	bool aWalk = (!shiftHeld) && isKeyDownChar('a');
+	bool sWalk = (!shiftHeld) && isKeyDownChar('s');
+	bool dWalk = (!shiftHeld) && isKeyDownChar('d');
+
+	bool wRun = (shiftHeld) && isKeyDownChar('w');
+	bool aRun = (shiftHeld) && isKeyDownChar('a');
+	bool sRun = (shiftHeld) && isKeyDownChar('s');
+	bool dRun = (shiftHeld) && isKeyDownChar('d');
+
+    bool up = ((GetAsyncKeyState(VK_UP) & 0x8000) != 0);
+	bool down = ((GetAsyncKeyState(VK_DOWN) & 0x8000) != 0);
+	bool left = ((GetAsyncKeyState(VK_LEFT) & 0x8000) != 0);
+	bool right = ((GetAsyncKeyState(VK_RIGHT) & 0x8000) != 0);
+
+	double dx = 0;
+	double dy = 0;
+
+	// WALK/RUN Vectors
+	if (wWalk || up) dy += 1;
+	if (sWalk || down) dy -= 1;
+	if (aWalk || left) dx -= 1;
+	if (dWalk || right) dx += 1;
+
+	if (wRun) dy += 1;
+	if (sRun) dy -= 1;
+	if (aRun) dx -= 1;
+	if (dRun) dx += 1;
+
+	// Normalize diagonal movement
+	if (dx != 0 && dy != 0)
+	{
+		double length = sqrt(dx * dx + dy * dy);
+		dx /= length;
+		dy /= length;
+	}
+
+    // Running is triggered by WASD + Shift (not arrow keys)
+    isRunning = ((wRun || aRun || sRun || dRun) && playerStamina > 0);
+	
+	if (isRunning)
+	{
+		playerStamina -= STAMINA_DRAIN;
+		if (playerStamina < 0) playerStamina = 0;
+	}
+	else
+	{
+		playerStamina += STAMINA_REGEN;
+		if (playerStamina > MAX_STAMINA) playerStamina = MAX_STAMINA;
+	}
+	
+	int currentSpeed = isRunning ? PLAYER_SPEED_RUN : PLAYER_SPEED_WALK;
+	if (dx == 0 && dy == 0) currentSpeed = 0;
+
+    // apply tentative movement and check collisions with obstacles
+	int deltaX = (int)(dx * currentSpeed);
+	int deltaY = (int)(dy * currentSpeed);
+
+	// Proposed positions
+	int tryX = playerX + deltaX;
+	int tryY = playerY + deltaY;
+
+	// clamp proposed to bounds
+	if (tryX < 0) tryX = 0;
+	if (tryY < 0) tryY = 0;
+	if (tryX + playerSize > WIN_W) tryX = WIN_W - playerSize;
+	if (tryY + playerSize > WIN_H) tryY = WIN_H - playerSize;
+
+    // Player represented as circle for collision tests
+	double pr = playerSize * 0.5;
+	double tryCX = tryX + pr;
+	double tryCY = tryY + pr;
+
+	// If combined move doesn't collide, apply it.
+	if (!circleIntersectsAnyObstacle(tryCX, tryCY, pr))
+	{
+		playerX = tryX;
+		playerY = tryY;
+	}
+	else
+	{
+		// Otherwise, attempt axis-aligned sliding: try X-only and Y-only moves.
+		int tryXOnly = playerX + deltaX;
+		int tryYOnly = playerY + deltaY;
+
+		// clamp
+		if (tryXOnly < 0) tryXOnly = 0;
+		if (tryXOnly + playerSize > WIN_W) tryXOnly = WIN_W - playerSize;
+		if (tryYOnly < 0) tryYOnly = 0;
+		if (tryYOnly + playerSize > WIN_H) tryYOnly = WIN_H - playerSize;
+
+		double tryCXOnly = tryXOnly + pr;
+		double tryCYOnly = tryYOnly + pr;
+
+		bool moved = false;
+
+		// Prefer X movement first if both inputs present; this gives intuitive sliding.
+		if (deltaX != 0 && !circleIntersectsAnyObstacle(tryCXOnly, playerY + pr, pr))
+		{
+			playerX = tryXOnly;
+			moved = true;
+		}
+
+		if (deltaY != 0 && !circleIntersectsAnyObstacle(playerX + pr, tryCYOnly, pr))
+		{
+			playerY = tryYOnly;
+			moved = true;
+		}
+
+		// If neither axis worked but one of them alone would work, try the other order
+		if (!moved)
+		{
+			if (deltaY != 0 && !circleIntersectsAnyObstacle(playerX + pr, tryCYOnly, pr))
+			{
+				playerY = tryYOnly;
+			}
+			else if (deltaX != 0 && !circleIntersectsAnyObstacle(tryCXOnly, playerY + pr, pr))
+			{
+				playerX = tryXOnly;
+			}
+		}
+	}
+
+	// ---------------------------
+	// Character animation (time-based)
+	// fixedUpdate runs every 10ms, so increment timer by 10 each tick when moving
+	if (dx != 0 || dy != 0)
+	{
+		charFrameTimerMs += 10; // fixedUpdate tick interval
+		if (charFrameTimerMs >= CHAR_FRAME_INTERVAL_MS)
+		{
+			charFrameTimerMs = 0;
+			charFrame = (charFrame + 1) % 6;
+		}
+	}
+	else
+	{
+		charFrameTimerMs = 0;
+		charFrame = 0;
+	}
+
+
+	// --------------------------------
+	// 🔊 SOUND SYSTEM
+	// --------------------------------
+
+	bool walkingNow = (dx != 0 || dy != 0) && !isRunning;
+
+	currentSoundRadius = 0;
+
+	// FOOTSTEP PULSE logic
+	// Fixed physics runs roughly every 10ms (100FPS). A footstep pulse every 30 frames is ~0.3s.
+	static int footstepTimer = 0;
+	if (walkingNow || isRunning)
+	{
+		footstepTimer++;
+		if (footstepTimer > 30) // Only emit sound periodically (steps)
+		{
+			footstepTimer = 0;
+			if (isRunning) currentSoundRadius = runRadius;
+			else if (walkingNow) currentSoundRadius = walkRadius;
+		}
+	}
+	else
+	{
+		footstepTimer = 0;
+	}
+
+	if (currentSoundRadius > 0)
+	{
+		makeSoundEvent(playerX + playerSize / 2,
+			playerY + playerSize / 2,
+			currentSoundRadius);
+	}
+
+	// Shooting pulse
+	if (shootPulseTimer > 0)
+	{
+		shootPulseTimer--;
+		makeSoundEvent(playerX + playerSize / 2,
+			playerY + playerSize / 2,
+			shootRadius);
+	}
+
+	// --------------------------------
+
+	// keep inside window
+	if (playerX < 0) playerX = 0;
+	if (playerY < 0) playerY = 0;
+	if (playerX + playerSize > WIN_W) playerX = WIN_W - playerSize;
+	if (playerY + playerSize > WIN_H) playerY = WIN_H - playerSize;
+
+	score++;
+
+	// --------------------------------
+	// BULLETS
+	// --------------------------------
+
+	for (int i = 0; i < MAX_BULLETS; i++)
+	{
+		if (!bulletActive[i]) continue;
+
+		bulletX[i] += (int)(bulletDX[i] * bulletSpeed);
+		bulletY[i] += (int)(bulletDY[i] * bulletSpeed);
+
+		if (bulletX[i] < 0 || bulletX[i] > WIN_W ||
+			bulletY[i] < 0 || bulletY[i] > WIN_H)
+			bulletActive[i] = false;
+	}
+
+	// Bullet -> Zombie
+	for (int i = 0; i < MAX_BULLETS; i++)
+	{
+		if (!bulletActive[i]) continue;
+
+		for (int j = 0; j < zombiesSpawned; j++)
+		{
+			if (!zombieAlive[j]) continue;
+
+			bool hitX = bulletX[i] > zombieX[j] &&
+				bulletX[i] < zombieX[j] + zombieSize[j];
+			bool hitY = bulletY[i] > zombieY[j] &&
+				bulletY[i] < zombieY[j] + zombieSize[j];
+
+			if (hitX && hitY)
+			{
+				zombieHP[j] -= 50;
+				bulletActive[i] = false;
+
+			/*	if (zombieHP[j] <= 0)
+				{
+					zombieAlive[j] = false;
+					score += 10;
+				}*/
+				if (zombieHP[j] <= 0)
+				{
+					zombieAlive[j] = false;
+					score += 10;
+					zombiesKilled++;   // count kill
+					
+					// 20% Item Drop Chance
+					if (rand() % 100 < 20)
+					{
+						for(int k=0; k < MAX_ITEMS; k++)
+						{
+							if (!itemActive[k])
+							{
+								itemActive[k] = true;
+								itemX[k] = zombieX[j];
+								itemY[k] = zombieY[j];
+								itemType[k] = rand() % 2; // 0=Ammo, 1=Medkit
+								break;
+							}
+						}
+					}
+				}
+
+				break;
+			}
+		}
+	}
+
+	// --------------------------------
+	// 🧠 ZOMBIE AI UPDATE
+	// --------------------------------
+
+    // update AI after movement logic but ensure zombies don't walk into obstacles
+	// modify moveZombieToward to check obstacles: we'll emulate by clamping movement if next step collides
+	for (int zi = 0; zi < zombiesSpawned; zi++)
+	{
+		if (!zombieAlive[zi]) continue;
+		// compute next step toward current target depending on state
+		double tx = (zState[zi] == Z_INVESTIGATE) ? hearX[zi] : wanderTX[zi];
+		double ty = (zState[zi] == Z_INVESTIGATE) ? hearY[zi] : wanderTY[zi];
+
+		double dxz = tx - zombieX[zi];
+		double dyz = ty - zombieY[zi];
+		double dz = sqrt(dxz*dxz + dyz*dyz);
+		if (dz > 0.001)
+		{
+			double vx = (dxz / dz) * zombieSpeed[zi];
+			double vy = (dyz / dz) * zombieSpeed[zi];
+
+            double nextX = zombieX[zi] + vx;
+			double nextY = zombieY[zi] + vy;
+
+			// zombie as circle (center)
+			double zr = zombieSize[zi] * 0.5;
+			double nextCX = nextX + zr;
+			double nextCY = nextY + zr;
+
+			if (!circleIntersectsAnyObstacle(nextCX, nextCY, zr))
+			{
+				zombieX[zi] = nextX;
+				zombieY[zi] = nextY;
+				zombieDX[zi] = vx;
+				zombieDY[zi] = vy;
+				zombieAngle[zi] = atan2(zombieDY[zi], zombieDX[zi]);
+			}
+			else
+			{
+				// attempt sliding for zombies: try X-only then Y-only
+				double tryXOnly = zombieX[zi] + vx;
+				double tryYOnly = zombieY[zi] + vy;
+				double tryCXOnly = tryXOnly + zr;
+				double tryCYOnly = tryYOnly + zr;
+
+				bool movedZ = false;
+				if (!circleIntersectsAnyObstacle(tryCXOnly, zombieY[zi] + zr, zr))
+				{
+					zombieX[zi] = tryXOnly;
+					movedZ = true;
+				}
+				if (!movedZ && !circleIntersectsAnyObstacle(zombieX[zi] + zr, tryCYOnly, zr))
+				{
+					zombieY[zi] = tryYOnly;
+					movedZ = true;
+				}
+
+				if (!movedZ)
+				{
+					if (zState[zi] == Z_INVESTIGATE)
+					{
+						hearTimer[zi] = 0;
+					}
+					else
+					{
+						wanderTimer[zi] = 0;
+					}
+				}
+				else
+				{
+					// update facing based on last movement
+					zombieDX[zi] = 0; zombieDY[zi] = 0; // will be set next tick
+				}
+			}
+		}
+	}
+
+	// call updateZombieAI to manage timers and states (movement handled above)
+	updateZombieAI();
+
+	// --------------------------------
+	// ZOMBIE DAMAGE
+	// --------------------------------
+
+	for (int i = 0; i < zombiesSpawned; i++)
+	{
+		if (!zombieAlive[i]) continue;
+
+		bool collisionX =
+			playerX < zombieX[i] + zombieSize[i] &&
+			playerX + playerSize > zombieX[i];
+
+		bool collisionY =
+			playerY < zombieY[i] + zombieSize[i] &&
+			playerY + playerSize > zombieY[i];
+
+		if (collisionX && collisionY)
+		{
+			playerHP--;
+			damageFlashTimer = 10;
+
+			if (playerHP <= 0)
+			{
+            gameOver = true;
+				mciSendString("stop bgsong", NULL, 0, NULL);
+				mciSendString("play ggsong", NULL, 0, NULL);
+           // switch to death screen
+			currentScreen = SCREEN_DEATH;
+			}
+		}
+	}
+
+	// ================= LEVEL COMPLETE CHECK =================
+	/*if (currentLevel == 1 && zombiesKilled >= ZOMBIE_COUNT)
+	{
+		gameState = STATE_LEVEL_CLEAR;
+		transitionTimer = 200;   // 2 seconds (if update is 10ms)
+	}*/
+
+	// ================= LEVEL COMPLETE CHECK =================
+	// Handled actively in framesSurvived tick now
+
+}
+
+
+// =====================================================
+// KEYBOARD (RESTART)
+// =====================================================
+void iKeyboard(unsigned char key)
+{
+	// Back button shortcuts
+	if ((key == 'b' || key == 'B') && (currentScreen == SCREEN_SETTINGS || currentScreen == SCREEN_CREDITS))
+	{
+		currentScreen = SCREEN_MENU;
+		return;
+	}
+
+    // ITEM PICKUP & OBJECTIVE INTERACT (delegated)
+    if (key == 'e' || key == 'E') handleInteract();
+
+	// PAUSE (ESC key is ASCII 27)
+	if (key == 27)
+	{
+		if (currentScreen == SCREEN_GAME) currentScreen = SCREEN_PAUSE;
+		else if (currentScreen == SCREEN_PAUSE) currentScreen = SCREEN_GAME;
+	}
+
+	// Single press reload fix
+	if ((key == 'q' || key == 'Q') && currentScreen == SCREEN_GAME && !gameOver)
+	{
+		ammo = maxAmmo;
+	}
+
+	// Toggle obstacle editor with 'O' while in game
+	if ((key == 'o' || key == 'O') && currentScreen == SCREEN_GAME)
+	{
+		obstacleEditorActive = !obstacleEditorActive;
+		// clear temporary state when closing
+		if (!obstacleEditorActive) { editorAdding = false; editorTempVx.clear(); editorTempVy.clear(); editorSelected = -1; }
+	}
+
+	// R key no longer restarts when dead; death screen buttons handle restart/menu
+}
+
+// =====================================================
+// MAIN
+// =====================================================
+int main()
+{
+	SetProcessDPIAware();
+
+	srand((unsigned)time(NULL));
+
+	// audio
+	mciSendString("open \"Audios//background.mp3\" alias bgsong", NULL, 0, NULL);
+	mciSendString("open \"Audios//gameover.mp3\" alias ggsong", NULL, 0, NULL);
+	mciSendString("play bgsong repeat", NULL, 0, NULL);
+
+	// init arrays
+	for (int i = 0; i < MAX_BULLETS; i++) bulletActive[i] = false;
+	for (int i = 0; i < ZOMBIE_COUNT; i++) zombieAlive[i] = false;
+
+	iInitialize(WIN_W, WIN_H, "Hospital Horror Game");
+
+	// load images
+	backgroundImage[0] = iLoadImage("Images\\bg1.png");
+	backgroundImage[1] = iLoadImage("Images\\bg2.png");
+	backgroundImage[2] = iLoadImage("Images\\bg3.png");
+	backgroundImage[3] = iLoadImage("Images\\bg4.png");
+	backgroundImage[4] = iLoadImage("Images\\bg5.png");
+
+	charImg[0] = iLoadImage("Images\\run1.png");
+	charImg[1] = iLoadImage("Images\\run2.png");
+	charImg[2] = iLoadImage("Images\\run3.png");
+	charImg[3] = iLoadImage("Images\\run4.png");
+	charImg[4] = iLoadImage("Images\\run5.png");
+	charImg[5] = iLoadImage("Images\\run6.png");
+
+	zombieImg[0] = iLoadImage("Images\\zombie1.png");
+	zombieImg[1] = iLoadImage("Images\\zombie2.png");
+	zombieImg[2] = iLoadImage("Images\\zombie3.png");
+	zombieImg[3] = iLoadImage("Images\\zombie4.png");
+	zombieImg[4] = iLoadImage("Images\\zombie5.png");
+	zombieImg[5] = iLoadImage("Images\\zombie6.png");
+	zombieImg[6] = iLoadImage("Images\\zombie7.png");
+
+    // initialize per-room obstacles
+	roomObstacles.resize(TOTAL_ROOMS);
+
+	// Room 0
+	Obstacle r0_1;
+	r0_1.vx = {300, 380, 360, 280};
+	r0_1.vy = {150, 160, 220, 200};
+	r0_1.r = 255; r0_1.g = 0; r0_1.b = 0; r0_1.a = 0.3f;
+	roomObstacles[0].push_back(r0_1);
+
+	Obstacle r0_2;
+	r0_2.vx = {80, 160, 140, 60};
+	r0_2.vy = {260, 270, 320, 310};
+	r0_2.r = 255; r0_2.g = 0; r0_2.b = 0; r0_2.a = 0.3f;
+	roomObstacles[0].push_back(r0_2);
+
+	// Room 1 (different layout)
+	Obstacle r1_1;
+	r1_1.vx = {120, 220, 200, 100};
+	r1_1.vy = {40, 60, 120, 100};
+	r1_1.r = 255; r1_1.g = 0; r1_1.b = 0; r1_1.a = 0.3f;
+	roomObstacles[1].push_back(r1_1);
+
+	// Room 2
+	Obstacle r2_1;
+	r2_1.vx = {320, 420, 400, 300};
+	r2_1.vy = {240, 260, 320, 300};
+	r2_1.r = 255; r2_1.g = 0; r2_1.b = 0; r2_1.a = 0.3f;
+	roomObstacles[2].push_back(r2_1);
+
+	// Room 3
+	Obstacle r3_1;
+	r3_1.vx = {200, 260, 240, 180};
+	r3_1.vy = {180, 200, 260, 240};
+	r3_1.r = 255; r3_1.g = 0; r3_1.b = 0; r3_1.a = 0.3f;
+	roomObstacles[3].push_back(r3_1);
+
+	// Room 4
+	Obstacle r4_1;
+	r4_1.vx = {40, 120, 100, 20};
+	r4_1.vy = {40, 60, 120, 100};
+	r4_1.r = 255; r4_1.g = 0; r4_1.b = 0; r4_1.a = 0.3f;
+	roomObstacles[4].push_back(r4_1);
+
+	// Ensure initial player position is not inside an obstacle
+	ensurePlayerNotInObstacle();
+
+	// timers
+	// iSetTimer(1000, spawnZombie); -> Disabled entirely. Dynamic spawnTimer is in fixedUpdate() based on BASE_SPAWN_RATE.
+	iSetTimer(10, fixedUpdate);   // ~100 FPS
+
+
+	iStart();
+	return 0;
+}
